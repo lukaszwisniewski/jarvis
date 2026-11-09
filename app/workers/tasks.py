@@ -4,6 +4,8 @@ from urllib.parse import urlparse
 
 import httpx
 
+from app.agent.graph import agent_retrieve_context
+from app.config import settings
 from app.llm.client import ask_llm
 from app.llm.endpoint_inventory import build_endpoint_inventory_response
 from app.retrieval.pipeline import retrieve_context
@@ -133,6 +135,17 @@ def _append_current_state_guardrail(answer: str, query: str, context: str) -> st
     return answer
 
 
+def _build_context(query: str, scope: str | None) -> str:
+    """Gather evidence for the question and return it as a context string.
+
+    AGENT_MODE only changes how evidence is gathered; answer synthesis,
+    guardrails and the source footer are the same for both paths.
+    """
+    if settings.agent_mode:
+        return asyncio.run(agent_retrieve_context(query, scope=scope))
+    return asyncio.run(retrieve_context(query, scope=scope))
+
+
 @celery_app.task(bind=True, max_retries=2)
 def process_jarvis_query(
     self,
@@ -159,8 +172,8 @@ def process_jarvis_query(
             timeout, or network error.
     """
     try:
-        # Run the async retrieval pipeline in a synchronous context
-        context = asyncio.run(retrieve_context(query, scope=scope))
+        # Run the async retrieval (pipeline or agent) in a synchronous context
+        context = _build_context(query, scope)
         answer = build_endpoint_inventory_response(query=query, context=context)
         if not answer:
             answer = ask_llm(query=query, context=context)
