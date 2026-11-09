@@ -71,6 +71,7 @@ The implementation is deliberately retrieval-first: the LLM is given source mate
 - Retrieved content treated as untrusted input: delimited in the prompt, with system-prompt instructions not to follow instructions found inside it.
 - Anthropic API integration for context-based answer synthesis.
 - Unit and integration tests using pytest, mocks, and fixtures.
+- Optional LangGraph agent mode in which Claude chooses which sources to search through tools, with a limit on tool rounds.
 - Offline retrieval evaluation (recall@k, MRR per source) over a fixed synthetic corpus, run in CI as a regression gate.
 - Docker Compose setup for local API, worker, and Redis services.
 
@@ -80,6 +81,7 @@ The implementation is deliberately retrieval-first: the LLM is given source mate
 app/
   api/                 FastAPI routes and Slack webhook
   connectors/          GitHub, Jira, Confluence and HTTP utilities
+  agent/               Optional LangGraph agent: search tools and graph
   llm/                 Anthropic client, prompts and deterministic helpers
   retrieval/           Query generation, providers, ranking and context building
   slack/               Slack verification and response formatting
@@ -160,6 +162,7 @@ The main settings include:
 | `ANTHROPIC_API_KEY` | Enables live answer synthesis |
 | `ANTHROPIC_MODEL_FAST`, `ANTHROPIC_MODEL_SYNTHESIS` | Optional model overrides for query generation and answer synthesis |
 | `LLM_STUB_MODE` | Enables stubbed LLM responses for tests/development |
+| `AGENT_MODE`, `AGENT_MAX_STEPS` | Optional agent mode (off by default) and its limit on rounds of tool calls (default 4); see [Agent mode](#agent-mode-optional) |
 | `GITHUB_TOKEN` | Authenticates GitHub retrieval |
 | `GITHUB_REPOS` | Default GitHub repositories to search; if empty, code search is not restricted to any repository |
 | `GITHUB_CF_REPOS`, `GITHUB_PY_REPOS` | Optional repository lists for the `cf` / `py` scope prefixes |
@@ -189,6 +192,35 @@ poetry run ruff check .
 ```
 
 Ruff and the test suite run in GitHub Actions on every push and pull request (see `.github/workflows/ci.yml`). Run the same checks locally with the commands above.
+
+## Agent mode (optional)
+
+By default JARVIS runs a fixed pipeline. It generates search queries, queries GitHub, Jira and Confluence at the same time, ranks the results and synthesises an answer. With `AGENT_MODE=true`, the evidence-gathering step is replaced by a small [LangGraph](https://github.com/langchain-ai/langgraph) agent in `app/agent/`:
+
+```text
+decide ──(tool calls, rounds left)──> run_tools ──> decide
+   └────(no tool calls, or limit hit)──> finish ──> END
+```
+
+- **decide:** Claude (`ANTHROPIC_MODEL_FAST`) sees the question and three tools: `search_github`, `search_jira` and `search_confluence`. It calls the ones it thinks will help, with short keyword queries.
+- **run_tools:** each tool searches one source through the same providers as the fixed pipeline. Tool output is wrapped in `<retrieved_context>` tags, escaped and capped at 4,000 characters. A failing source or an invalid tool call comes back to Claude as an error result instead of stopping the run.
+- **Loop limit:** the loop stops when Claude stops calling tools, or after `AGENT_MAX_STEPS` rounds of tool calls (default 4).
+- **finish:** everything found is ranked with the same normalisation, GitHub bias and per-source caps as the fixed pipeline, and formatted as the same context block.
+
+After that, both modes do the same thing: answer synthesis through `ask_llm`, the current-state guardrail and the source footer. In `LLM_STUB_MODE`, agent mode falls back to the fixed pipeline, because there is no real model to choose tools.
+
+### Tradeoffs compared with the fixed pipeline
+
+| | Fixed pipeline (default) | Agent mode |
+|---|---|---|
+| Claude calls per question | 2: query generation and synthesis | N + 2 for N tool rounds: one decide call per round, a final decide, and synthesis. That is up to 6 with the default limit |
+| Source calls | All three sources, every time, in parallel | Only the sources Claude picks. Rounds run one after another, which adds latency |
+| Queries per source | Up to 5 generated queries | One query per tool call. Claude can retry with different keywords |
+| Repeatability | The search plan is fixed; only the generated queries can vary | Which sources are searched, and how often, can differ between runs |
+| Prompt-injection surface | Retrieved text reaches only the synthesis call | Retrieved text also reaches the calls that decide the next search. It is delimited, escaped and size-capped, which reduces this risk but does not remove it |
+| Evaluation | Covered by the offline eval | **Not measured.** The offline eval runs in stub mode, where agent mode uses the fixed pipeline |
+
+Agent mode is a demonstration of tool-based retrieval, not a measured improvement. No claim is made that it gives better answers than the fixed pipeline.
 
 ## Evaluation
 
@@ -239,6 +271,7 @@ The output goes to `eval/results/judge.json`, which is gitignored. No judge resu
 - The retrieval and ranking stages use application logic and heuristics; there is no vector database or semantic code index in the current implementation.
 - The project does not include a hosted production deployment or infrastructure provisioning.
 - Conversation history is not persisted as long-term assistant memory.
+- Agent mode is optional, off by default and not covered by the offline evaluation.
 - Prompt-injection handling is a prompt-level mitigation (untrusted-content instructions and delimiters), not complete protection.
 
 JARVIS is intended to demonstrate practical backend engineering: API integration, asynchronous processing, retrieval orchestration, failure handling, testing, and LLM integration.
