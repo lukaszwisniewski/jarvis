@@ -217,7 +217,7 @@ Current numbers from `eval/results/retrieval.json`: 20 questions over 19 GitHub 
 
 Per-source rows count only that source's relevant documents, but use their positions in the final merged ranking. The low Jira and Confluence MRR reflects the deliberate GitHub bias and the default cap of one Confluence result. The misses come from the query fallback. It keeps question words such as "why" and "which", and for database questions it can pick "which" as the entity to search for.
 
-Caveats: the corpus and labels were written by the project author and are small. The numbers detect regressions in this code. They are not a benchmark of retrieval quality on real repositories. Settings in a local `.env` (caps, keywords, extensions) change the results; the committed numbers use the defaults.
+Caveats: the corpus and labels were written by the project author and are small. The numbers detect regressions in this code. They are not a benchmark of retrieval quality on real repositories. Settings in a local `.env` (caps, keywords, extensions) change the results; the committed numbers use the defaults. After the first run, the fake backend was changed to split identifiers such as `payment_service` into separate words, as real search engines do; this raised overall recall@10 from 0.89 to 0.95.
 
 CI runs the eval and fails if overall recall@10 drops below 0.90. That gate was set just below the first measured value of 0.95.
 
