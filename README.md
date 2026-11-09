@@ -203,9 +203,9 @@ decide ──(tool calls)──> run_tools ──(rounds left)──> decide
 ```
 
 - **decide:** Claude (`ANTHROPIC_MODEL_FAST`) sees the question and three tools: `search_github`, `search_jira` and `search_confluence`. It calls the ones it thinks will help, with short keyword queries.
-- **run_tools:** each tool searches one source through the same providers as the fixed pipeline. Tool output is wrapped in `<retrieved_context>` tags, escaped and capped at 4,000 characters. A failing source or an invalid tool call comes back to Claude as an error result instead of stopping the run.
+- **run_tools:** each tool searches one source through the same providers as the fixed pipeline. At most 3 tool calls run per round; extra calls get an error result. Tool output is limited to 4,000 characters of content per call, then escaped and wrapped in `<retrieved_context>` tags. A failing source or an invalid tool call comes back to Claude as an error result instead of stopping the run.
 - **Loop limit:** the loop stops when Claude stops calling tools, or after `AGENT_MAX_TOOL_ROUNDS` rounds of tool calls (default 4, allowed 1–8).
-- **finish:** everything found is ranked with the same normalisation, GitHub bias and per-source caps as the fixed pipeline, and formatted as the same context block.
+- **finish:** everything found is ranked with the same normalisation, GitHub bias and per-source caps as the fixed pipeline, and formatted as the same context block. The ranking is not equivalent to the fixed pipeline's, though. Each provider scores a result against the query that found it, and each agent tool call uses its own query. Scores from different agent queries are therefore not directly comparable, even after per-source normalisation.
 
 After that, both modes do the same thing: answer synthesis through `ask_llm`, the current-state guardrail and the source footer. In `LLM_STUB_MODE`, agent mode falls back to the fixed pipeline, because there is no real model to choose tools.
 
@@ -214,13 +214,18 @@ After that, both modes do the same thing: answer synthesis through `ask_llm`, th
 | | Fixed pipeline (default) | Agent mode |
 |---|---|---|
 | Claude calls per question | 2: query generation and synthesis | One decide call per tool round, one more if Claude stops searching by itself, and synthesis. That is at most `AGENT_MAX_TOOL_ROUNDS` + 1, so 5 with the default limit |
-| Source calls | All three sources, every time, in parallel | Only the sources Claude picks. Rounds run one after another, which adds latency |
+| Source calls | All three sources, every time, in parallel | Only the sources Claude picks: at most 3 searches per round, so 12 with the default limit. Rounds run one after another, which adds latency |
 | Queries per source | Up to 5 generated queries | One query per tool call. Claude can retry with different keywords |
 | Repeatability | The search plan is fixed; only the generated queries can vary | Which sources are searched, and how often, can differ between runs |
 | Prompt-injection surface | Retrieved text reaches only the synthesis call | Retrieved text also reaches the calls that decide the next search. It is delimited, escaped and size-capped, which reduces this risk but does not remove it |
 | Evaluation | Covered by the offline eval | **Not measured.** The offline eval runs in stub mode, where agent mode uses the fixed pipeline |
 
 Agent mode is a demonstration of tool-based retrieval, not a measured improvement. No claim is made that it gives better answers than the fixed pipeline.
+
+### Known limitations of agent mode
+
+- **Retrieved text can steer later searches.** Claude writes each search query after reading earlier tool output, so injected text in a ticket, page or file could try to influence the next query. Tool input is checked only for type and length (200 characters). Search syntax is not removed. A GitHub query could, for example, add qualifiers such as `repo:` or `org:` and search beyond `GITHUB_REPOS`, within what the GitHub token can read. The fixed pipeline already passes generated queries to the connectors unchanged. What is new in agent mode is that third-party content can influence those queries. Hardening query handling in the connectors is planned as a separate task.
+- **LangSmith tracing.** Installing LangGraph also installs the `langsmith` package. JARVIS does not configure or enable it. LangSmith tracing is off unless it is turned on through environment variables, such as `LANGSMITH_TRACING` with a LangSmith API key. If it is enabled, the agent's graph state may be sent to LangSmith, including the question, Claude's messages and retrieved content. Leave these variables unset unless you intend that.
 
 ## Evaluation
 
