@@ -29,3 +29,6 @@ htmlcov/
 build/
 dist/
 *.egg-info/
+
+# LLM judge output is local only; no judge numbers are published
+eval/results/judge.json
