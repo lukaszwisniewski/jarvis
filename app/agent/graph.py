@@ -136,7 +136,7 @@ async def agent_retrieve_context(
     graph = build_agent_graph(
         client=client,
         model=settings.anthropic_model_fast,
-        max_tool_rounds=settings.agent_max_steps,
+        max_tool_rounds=settings.agent_max_tool_rounds,
     )
     state = await graph.ainvoke(
         {

@@ -1,6 +1,6 @@
 import json
 
-from pydantic import field_validator
+from pydantic import Field, field_validator
 from pydantic_core.core_schema import ValidationInfo
 from pydantic_settings import (
     BaseSettings,
@@ -60,9 +60,10 @@ class Settings(BaseSettings):
     llm_stub_mode: bool = False
 
     # Agent mode (off by default): Claude chooses which sources to search via
-    # tools, for at most agent_max_steps rounds of tool calls.
+    # tools, for at most agent_max_tool_rounds rounds of tool calls. The upper
+    # bound keeps cost predictable; an out-of-range value fails at startup.
     agent_mode: bool = False
-    agent_max_steps: int = 4
+    agent_max_tool_rounds: int = Field(default=4, ge=1, le=8)
 
     # Retrieval policy (data-driven; can be tuned via env)
     retrieval_source_caps: dict[str, int] = {

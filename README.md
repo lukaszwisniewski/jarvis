@@ -162,7 +162,7 @@ The main settings include:
 | `ANTHROPIC_API_KEY` | Enables live answer synthesis |
 | `ANTHROPIC_MODEL_FAST`, `ANTHROPIC_MODEL_SYNTHESIS` | Optional model overrides for query generation and answer synthesis |
 | `LLM_STUB_MODE` | Enables stubbed LLM responses for tests/development |
-| `AGENT_MODE`, `AGENT_MAX_STEPS` | Optional agent mode (off by default) and its limit on rounds of tool calls (default 4); see [Agent mode](#agent-mode-optional) |
+| `AGENT_MODE`, `AGENT_MAX_TOOL_ROUNDS` | Optional agent mode (off by default) and its limit on rounds of tool calls (default 4, allowed 1–8); see [Agent mode](#agent-mode-optional) |
 | `GITHUB_TOKEN` | Authenticates GitHub retrieval |
 | `GITHUB_REPOS` | Default GitHub repositories to search; if empty, code search is not restricted to any repository |
 | `GITHUB_CF_REPOS`, `GITHUB_PY_REPOS` | Optional repository lists for the `cf` / `py` scope prefixes |
@@ -204,7 +204,7 @@ decide ──(tool calls, rounds left)──> run_tools ──> decide
 
 - **decide:** Claude (`ANTHROPIC_MODEL_FAST`) sees the question and three tools: `search_github`, `search_jira` and `search_confluence`. It calls the ones it thinks will help, with short keyword queries.
 - **run_tools:** each tool searches one source through the same providers as the fixed pipeline. Tool output is wrapped in `<retrieved_context>` tags, escaped and capped at 4,000 characters. A failing source or an invalid tool call comes back to Claude as an error result instead of stopping the run.
-- **Loop limit:** the loop stops when Claude stops calling tools, or after `AGENT_MAX_STEPS` rounds of tool calls (default 4).
+- **Loop limit:** the loop stops when Claude stops calling tools, or after `AGENT_MAX_TOOL_ROUNDS` rounds of tool calls (default 4, allowed 1–8).
 - **finish:** everything found is ranked with the same normalisation, GitHub bias and per-source caps as the fixed pipeline, and formatted as the same context block.
 
 After that, both modes do the same thing: answer synthesis through `ask_llm`, the current-state guardrail and the source footer. In `LLM_STUB_MODE`, agent mode falls back to the fixed pipeline, because there is no real model to choose tools.
