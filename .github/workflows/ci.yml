@@ -17,6 +17,8 @@ jobs:
       - run: poetry install --with dev
       - run: poetry run ruff check .
       - run: poetry run pytest -q
+      - name: Offline retrieval eval (regression gate)
+        run: poetry run python -m eval.run_retrieval_eval --min-recall-at-10 0.90 --output "$RUNNER_TEMP/retrieval.json"
 
   docker:
     runs-on: ubuntu-latest

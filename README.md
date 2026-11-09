@@ -71,6 +71,7 @@ The implementation is deliberately retrieval-first: the LLM is given source mate
 - Retrieved content treated as untrusted input: delimited in the prompt, with system-prompt instructions not to follow instructions found inside it.
 - Anthropic API integration for context-based answer synthesis.
 - Unit and integration tests using pytest, mocks, and fixtures.
+- Offline retrieval evaluation (recall@k, MRR per source) over a fixed synthetic corpus, run in CI as a regression gate.
 - Docker Compose setup for local API, worker, and Redis services.
 
 ## Project structure
@@ -86,6 +87,7 @@ app/
 tests/
   unit/
   integration/
+eval/                  Offline retrieval evaluation: corpus, golden set, metrics, runner
 docs/
   architecture.md
   development.md
@@ -188,11 +190,52 @@ poetry run ruff check .
 
 Ruff and the test suite run in GitHub Actions on every push and pull request (see `.github/workflows/ci.yml`). Run the same checks locally with the commands above.
 
+## Evaluation
+
+`eval/` contains an offline retrieval evaluation. It runs the real query fallback, connectors, providers and ranking (`retrieve()`) against a fake HTTP backend that serves a small synthetic corpus, and scores the ranked results against hand-labelled relevant documents.
+
+```bash
+poetry run python -m eval.run_retrieval_eval
+```
+
+It needs no credentials or network access. Unknown URLs fail instead of being requested. A run takes a few seconds and writes per-question details to `eval/results/retrieval.json`.
+
+**What is measured:** the deterministic query fallback (query generation runs in stub mode), JARVIS's local re-scoring, per-source normalisation, GitHub bias, per-source caps and the final top-10 ranking.
+
+**What is not measured:** the quality of GitHub, Jira or Confluence search (the fake backend selects candidates with simple word overlap), LLM-generated queries, behaviour on real data, or answer quality.
+
+### Results
+
+Current numbers from `eval/results/retrieval.json`: 20 questions over 19 GitHub files, 12 Jira issues and 8 Confluence pages.
+
+| Source | Questions | Recall@5 | Recall@10 | MRR |
+|---|---|---|---|---|
+| Overall | 20 | 0.83 | 0.95 | 0.76 |
+| GitHub | 20 | 0.78 | 0.97 | 0.74 |
+| Jira | 12 | 1.00 | 1.00 | 0.42 |
+| Confluence | 11 | 0.73 | 0.82 | 0.25 |
+
+Per-source rows count only that source's relevant documents, but use their positions in the final merged ranking. The low Jira and Confluence MRR reflects the deliberate GitHub bias and the default cap of one Confluence result. The misses come from the query fallback. It keeps question words such as "why" and "which", and for database questions it can pick "which" as the entity to search for.
+
+Caveats: the corpus and labels were written by the project author and are small. The numbers detect regressions in this code. They are not a benchmark of retrieval quality on real repositories. Settings in a local `.env` (caps, keywords, extensions) change the results; the committed numbers use the defaults. After the first run, the fake backend was changed to split identifiers such as `payment_service` into separate words, as real search engines do; this raised overall recall@10 from 0.89 to 0.95.
+
+CI runs the eval and fails if overall recall@10 drops below 0.90. That gate was set just below the first measured value of 0.95.
+
+### Optional: LLM-as-judge groundedness check
+
+`eval/judge.py` retrieves context the same way, generates an answer through the normal synthesis path, and asks Claude whether every claim in the answer is supported by the context. Both the context and the answer are passed to the judge as delimited, untrusted data. It makes paid API calls, so it is off unless you opt in:
+
+```bash
+EVAL_LLM_JUDGE=1 ANTHROPIC_API_KEY=... poetry run python -m eval.judge
+```
+
+The output goes to `eval/results/judge.json`, which is gitignored. No judge results are published in this repository, and a judge model can itself be wrong.
+
 ## Current scope and limitations
 
 - Slack is the implemented user interface; this is not currently a general-purpose web chat application.
 - Retrieval depends on access to the configured external APIs and their permissions.
-- Answer quality depends on the relevance and completeness of retrieved source material. There is no automated evaluation of retrieval or answer quality.
+- Answer quality depends on the relevance and completeness of retrieved source material. Retrieval ranking is evaluated offline against a small synthetic corpus (see [Evaluation](#evaluation)); there is no evaluation against real GitHub, Jira or Confluence data, and no published measurement of answer quality.
 - The retrieval and ranking stages use application logic and heuristics; there is no vector database or semantic code index in the current implementation.
 - The project does not include a hosted production deployment or infrastructure provisioning.
 - Conversation history is not persisted as long-term assistant memory.

@@ -43,7 +43,9 @@ def _extract_github_repo(url: str) -> str | None:
     return f"{parts[0]}/{parts[1]}"
 
 
-def _source_breakdown_from_context(context: str) -> tuple[dict[str, int], int]:
+def _source_breakdown_from_context(
+    context: str,
+) -> tuple[dict[str, int], int, int]:
     repo_counts: dict[str, int] = {}
     jira_count = 0
     confluence_count = 0

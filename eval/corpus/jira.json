@@ -1,0 +1,16 @@
+{
+  "issues": [
+    {"key": "ORD-101", "summary": "Payment retries cause duplicate charges", "description": "When Stripe times out the payment service retries the charge. Some customers were charged twice. Use an idempotency key per order.", "status": "Done"},
+    {"key": "ORD-102", "summary": "JWT access token expiry too short", "description": "Users are logged out after 15 minutes. Increase the access token expiry or add a refresh flow.", "status": "In Progress"},
+    {"key": "ORD-103", "summary": "Order confirmation emails delayed", "description": "Celery worker queue backlog delays confirmation emails by up to an hour when the mailer is unavailable.", "status": "Open"},
+    {"key": "ORD-104", "summary": "Stock not released when orders are cancelled", "description": "Cancelling an order leaves stock reserved in Redis. release_stock must run on cancellation.", "status": "Done"},
+    {"key": "ORD-105", "summary": "Migrate orders database to RDS Postgres 15", "description": "Move the orders Postgres database to AWS RDS engine version 15 using Terraform.", "status": "Done"},
+    {"key": "ORD-106", "summary": "Add rate limiting to the public API", "description": "Limit requests per client IP to protect the API. Return HTTP 429 when the limit is exceeded.", "status": "Done"},
+    {"key": "ORD-107", "summary": "Partial refunds fail", "description": "The refund service always refunds the full amount. Partial refund amounts are ignored.", "status": "Open"},
+    {"key": "ORD-108", "summary": "Stripe webhook signature verification fails after key rotation", "description": "After rotating the webhook secret, webhook events are rejected because the signature check uses the old secret.", "status": "Done"},
+    {"key": "ORD-109", "summary": "Discount codes applied twice", "description": "Applying a discount code twice reduces the order total twice. Track whether a discount was already applied.", "status": "Done"},
+    {"key": "ORD-110", "summary": "Product catalog cache is stale after updates", "description": "The catalog is cached in Redis for 5 minutes. Invalidate the cache when products change.", "status": "Open"},
+    {"key": "ORD-111", "summary": "Upgrade Python to 3.12", "description": "Upgrade the runtime and CI images to Python 3.12.", "status": "Done"},
+    {"key": "ORD-112", "summary": "Onboarding guide is outdated", "description": "New joiners report the onboarding guide references old tools.", "status": "Open"}
+  ]
+}

@@ -1,0 +1,25 @@
+{
+  "description": "Hand-labelled questions over eval/corpus. Relevant ids were written before the first eval run and must not be edited to raise scores.",
+  "questions": [
+    {"id": "q01", "question": "How does the payment service avoid duplicate charges when Stripe times out?", "relevant": ["github:app/services/payment_service.py", "jira:ORD-101", "confluence:1002"]},
+    {"id": "q02", "question": "Which API endpoints exist for orders?", "relevant": ["github:app/api/orders.py"]},
+    {"id": "q03", "question": "How long is a JWT access token valid and how is it refreshed?", "relevant": ["github:app/auth/jwt.py", "github:app/api/auth.py", "jira:ORD-102", "confluence:1003"]},
+    {"id": "q04", "question": "Why are order confirmation emails delayed?", "relevant": ["github:app/workers/email_tasks.py", "jira:ORD-103", "confluence:1006"]},
+    {"id": "q05", "question": "Is stock released when an order is cancelled?", "relevant": ["github:app/services/inventory.py", "github:app/api/orders.py", "jira:ORD-104"]},
+    {"id": "q06", "question": "Which database tables store orders and customers?", "relevant": ["github:app/db/models.py", "github:app/db/order_repository.py", "confluence:1005"]},
+    {"id": "q07", "question": "What is the overall architecture of the orders service?", "relevant": ["github:README.md", "confluence:1001"]},
+    {"id": "q08", "question": "How is the service deployed to production?", "relevant": ["github:docs/deployment.md", "github:infra/main.tf", "confluence:1004"]},
+    {"id": "q09", "question": "How do partial refunds work?", "relevant": ["github:app/services/refund_service.py", "jira:ORD-107", "confluence:1002"]},
+    {"id": "q10", "question": "How are Stripe webhook signatures verified?", "relevant": ["github:app/api/webhooks.py", "jira:ORD-108"]},
+    {"id": "q11", "question": "Can a discount code be applied twice to the same order?", "relevant": ["github:app/services/pricing.py", "jira:ORD-109"]},
+    {"id": "q12", "question": "How long is the product catalog cached in Redis?", "relevant": ["github:app/cache/redis_cache.py", "jira:ORD-110"]},
+    {"id": "q13", "question": "What rate limit applies to the public API?", "relevant": ["github:app/middleware/rate_limit.py", "jira:ORD-106", "confluence:1007"]},
+    {"id": "q14", "question": "Which Postgres version does the orders database run on?", "relevant": ["github:infra/main.tf", "jira:ORD-105"]},
+    {"id": "q15", "question": "Where is the SQL query that lists orders for a customer?", "relevant": ["github:app/db/order_repository.py"]},
+    {"id": "q16", "question": "How does login work?", "relevant": ["github:app/api/auth.py", "confluence:1003"]},
+    {"id": "q17", "question": "How many times is a failed confirmation email retried?", "relevant": ["github:app/workers/email_tasks.py", "confluence:1006"]},
+    {"id": "q18", "question": "Which settings configure Stripe and SMTP?", "relevant": ["github:app/config.py"]},
+    {"id": "q19", "question": "Why were customers charged twice?", "relevant": ["jira:ORD-101", "confluence:1002", "github:app/services/payment_service.py"]},
+    {"id": "q20", "question": "What happens to the cache when products change?", "relevant": ["github:app/cache/redis_cache.py", "jira:ORD-110"]}
+  ]
+}
