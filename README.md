@@ -1,0 +1,201 @@
+# JARVIS — Joint Archival Retrieval of Verbose Information Systems
+
+![CI](https://github.com/lukaszwisniewski/jarvis/actions/workflows/ci.yml/badge.svg)
+
+JARVIS is a retrieval-first engineering assistant that answers technical questions using evidence gathered from software development tools. It retrieves relevant context from GitHub, Jira, and Confluence before asking an LLM to synthesize an answer, and delivers the result through a Slack slash command.
+
+The project is built with **Python, FastAPI, Celery, Redis, and the Anthropic API**. It is a working prototype/portfolio project, not a turnkey hosted service.
+
+## What it does
+
+A user submits a question in Slack:
+
+```text
+/jarvis how does the authentication flow work?
+```
+
+JARVIS then:
+
+1. verifies the incoming Slack request;
+2. parses the question and optional retrieval scope;
+3. generates focused search queries;
+4. retrieves relevant material from GitHub, Jira, and Confluence;
+5. normalizes scores per source, removes duplicates within each source, applies per-source limits and ranks the results heuristically;
+6. formats the top results (up to ten) into a plain-text context with source labels and URLs;
+7. uses Anthropic to synthesize an answer from that context;
+8. posts the answer back to Slack with a footer showing how many results came from each source.
+
+The application also exposes `GET /health` for a basic health check.
+
+## Architecture
+
+```mermaid
+flowchart LR
+    A[Slack slash command] --> B[FastAPI webhook]
+    B --> C[Signature verification]
+    C --> D[Celery task]
+    D --> E[Retrieval pipeline]
+    E --> F[Query generation]
+    F --> G[GitHub / Jira / Confluence]
+    G --> H[Normalize, deduplicate and rank]
+    H --> I[Context builder]
+    I --> J[Anthropic synthesis]
+    J --> K[Slack response]
+    D <--> R[(Redis)]
+```
+
+### Main components
+
+| Component | Responsibility |
+|---|---|
+| FastAPI | HTTP API and Slack webhook |
+| Slack integration | Request signature verification and response formatting |
+| Celery | Asynchronous execution of retrieval and answer generation |
+| Redis | Celery broker and result backend |
+| Retrieval pipeline | Coordinates query generation and source retrieval |
+| GitHub, Jira, Confluence providers | Fetch and normalize source-specific results |
+| Context builder | Formats the top-ranked results into a plain-text context |
+| Anthropic client | Generates the final answer from the question and retrieved context |
+
+The implementation is deliberately retrieval-first: the LLM is given source material gathered for the question rather than being asked to answer solely from its general knowledge. The system prompt instructs the model to base implementation details on that material, but answers are not checked against it and do not include per-claim citations.
+
+## Technical highlights
+
+- FastAPI application with a separate Celery worker.
+- Asynchronous retrieval across multiple external providers.
+- Provider-specific connectors with HTTP timeout and retry handling.
+- Query generation and intent-aware retrieval.
+- Per-source score normalization, within-source deduplication, heuristic ranking, and per-source limits.
+- Context construction with source labels and URLs, plus a per-source result-count footer in each answer.
+- Slack request-signature verification.
+- Retrieved content treated as untrusted input: delimited in the prompt, with system-prompt instructions not to follow instructions found inside it.
+- Anthropic API integration for context-based answer synthesis.
+- Unit and integration tests using pytest, mocks, and fixtures.
+- Docker Compose setup for local API, worker, and Redis services.
+
+## Project structure
+
+```text
+app/
+  api/                 FastAPI routes and Slack webhook
+  connectors/          GitHub, Jira, Confluence and HTTP utilities
+  llm/                 Anthropic client, prompts and deterministic helpers
+  retrieval/           Query generation, providers, ranking and context building
+  slack/               Slack verification and response formatting
+  workers/             Celery application and background tasks
+tests/
+  unit/
+  integration/
+docs/
+  architecture.md
+  development.md
+```
+
+## Requirements
+
+- Python 3.12
+- Poetry
+- Docker and Docker Compose
+- Credentials for the integrations you want to use:
+  - Slack app signing secret
+  - Anthropic API key
+  - GitHub token
+  - Jira token, base URL and account email
+  - Confluence base URL (Confluence requests reuse the Jira email and token)
+
+The application can be configured for the providers available to your team. GitHub repository lists and retrieval scopes are supplied through environment variables; no organization-specific repository defaults are included.
+
+## Local setup
+
+Clone the repository and install dependencies:
+
+```bash
+poetry install --with dev
+```
+
+Create a local environment file from the template (Docker Compose requires `.env` to exist):
+
+```bash
+cp .env.example .env
+```
+
+Replace the placeholder values in `.env`. At minimum, a live Slack request requires `SLACK_SIGNING_SECRET`, and live answer synthesis requires `ANTHROPIC_API_KEY` (or set `LLM_STUB_MODE=true`). Provider credentials are needed only for the integrations you use.
+
+Start the local stack:
+
+```bash
+docker compose up --build
+```
+
+The Compose stack starts:
+
+- the FastAPI application on port `8000`;
+- the Celery worker;
+- Redis on port `6379`.
+
+Check the API:
+
+```bash
+curl http://localhost:8000/health
+```
+
+Expected response:
+
+```json
+{"status": "ok"}
+```
+
+## Configuration
+
+All settings are defined in [`app/config.py`](app/config.py) and can be supplied through environment variables or the local `.env` file.
+
+The main settings include:
+
+| Variable | Purpose |
+|---|---|
+| `SLACK_SIGNING_SECRET` | Verifies incoming Slack requests |
+| `SLACK_ALLOWED_USER_IDS` | Optional comma-separated allowlist of Slack user IDs; empty allows all users |
+| `ANTHROPIC_API_KEY` | Enables live answer synthesis |
+| `ANTHROPIC_MODEL_FAST`, `ANTHROPIC_MODEL_SYNTHESIS` | Optional model overrides for query generation and answer synthesis |
+| `LLM_STUB_MODE` | Enables stubbed LLM responses for tests/development |
+| `GITHUB_TOKEN` | Authenticates GitHub retrieval |
+| `GITHUB_REPOS` | Default GitHub repositories to search; if empty, code search is not restricted to any repository |
+| `GITHUB_CF_REPOS`, `GITHUB_PY_REPOS` | Optional repository lists for the `cf` / `py` scope prefixes |
+| `GITHUB_*_ALLOWED_EXTENSIONS`, `GITHUB_*_EXTENSION_SCORES` | Optional file-extension filters and ranking weights (default, `CF` and `PY` profiles) |
+| `JIRA_TOKEN`, `JIRA_BASE_URL`, `JIRA_EMAIL` | Jira connection settings (Atlassian Cloud REST API v3) |
+| `CONFLUENCE_BASE_URL` | Confluence site root, without `/wiki`; authenticates with the Jira email and token; empty disables Confluence |
+| `REDIS_URL` | Celery broker/backend URL |
+| `RETRIEVAL_SOURCE_CAPS` | Maximum number of results retained per source |
+| `RETRIEVAL_*_KEYWORDS` | Terms used by retrieval intent and query preprocessing |
+
+List and mapping values must be written as JSON, for example `GITHUB_REPOS=["your-org/your-repo"]` or `RETRIEVAL_SOURCE_CAPS={"github": 6, "jira": 3, "confluence": 1}`. Comma-separated values are not parsed by the settings loader.
+
+See [`.env.example`](.env.example) for all supported keys, defaults and formats. Keep real credentials in `.env` or your secret manager; never commit them.
+
+## Tests and code quality
+
+Run the test suite:
+
+```bash
+poetry run pytest -q
+```
+
+Run Ruff:
+
+```bash
+poetry run ruff check .
+```
+
+Ruff and the test suite run in GitHub Actions on every push and pull request (see `.github/workflows/ci.yml`). Run the same checks locally with the commands above.
+
+## Current scope and limitations
+
+- Slack is the implemented user interface; this is not currently a general-purpose web chat application.
+- Retrieval depends on access to the configured external APIs and their permissions.
+- Answer quality depends on the relevance and completeness of retrieved source material. There is no automated evaluation of retrieval or answer quality.
+- The retrieval and ranking stages use application logic and heuristics; there is no vector database or semantic code index in the current implementation.
+- The project does not include a hosted production deployment or infrastructure provisioning.
+- Conversation history is not persisted as long-term assistant memory.
+- Prompt-injection handling is a prompt-level mitigation (untrusted-content instructions and delimiters), not complete protection.
+
+JARVIS is intended to demonstrate practical backend engineering: API integration, asynchronous processing, retrieval orchestration, failure handling, testing, and LLM integration.
