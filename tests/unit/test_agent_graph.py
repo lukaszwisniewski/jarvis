@@ -184,3 +184,21 @@ async def test_stub_mode_falls_back_to_fixed_pipeline(mock_pipeline) -> None:
 
     assert context == "pipeline context"
     mock_pipeline.assert_awaited_once_with("question", scope="python")
+
+
+@pytest.mark.asyncio
+@patch("app.agent.tools.retrieve_from_source", new_callable=AsyncMock)
+async def test_excess_tool_calls_in_one_round_are_rejected(mock_retrieve) -> None:
+    mock_retrieve.return_value = []
+    calls = [tool_call("search_github", f"q{i}", call_id=f"c{i}") for i in range(5)]
+    client = FakeClaude(calls, [text()])
+
+    await run_graph(client)
+
+    # Only the first three searches ran.
+    assert mock_retrieve.await_count == 3
+    # Every tool_use still gets a tool_result, in order, in one user message.
+    sent = tool_results_sent(client, 1)
+    assert [r["tool_use_id"] for r in sent] == ["c0", "c1", "c2", "c3", "c4"]
+    assert [r["is_error"] for r in sent] == [False, False, False, True, True]
+    assert sent[3]["content"].startswith("Too many tool calls this round")

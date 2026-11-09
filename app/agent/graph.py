@@ -28,6 +28,10 @@ from app.retrieval.retrieval_service import rank_results
 
 logger = logging.getLogger(__name__)
 
+# At most this many searches run per round (one per source). Extra tool calls
+# get an error result, because every tool_use block needs a tool_result.
+MAX_TOOL_CALLS_PER_ROUND = 3
+
 
 class AgentState(TypedDict):
     question: str
@@ -73,9 +77,17 @@ def build_agent_graph(client, model: str, max_tool_rounds: int):
 
     async def run_tools(state: AgentState) -> dict:
         calls = _tool_calls(state["messages"][-1])
+        allowed = calls[:MAX_TOOL_CALLS_PER_ROUND]
         outcomes = await asyncio.gather(
-            *(run_tool(call.name, call.input, state["scope"]) for call in calls)
+            *(run_tool(call.name, call.input, state["scope"]) for call in allowed)
         )
+        rejected = (
+            f"Too many tool calls this round; at most {MAX_TOOL_CALLS_PER_ROUND} "
+            "are run per round.",
+            [],
+            True,
+        )
+        outcomes += [rejected] * (len(calls) - len(allowed))
 
         tool_results = []
         found = list(state["results"])
