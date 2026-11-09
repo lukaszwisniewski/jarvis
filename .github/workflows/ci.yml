@@ -17,3 +17,9 @@ jobs:
       - run: poetry install --with dev
       - run: poetry run ruff check .
       - run: poetry run pytest -q
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -t jarvis .
