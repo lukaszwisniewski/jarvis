@@ -3,7 +3,7 @@ FROM python:3.12-slim
 WORKDIR /app
 
 # Install Poetry
-RUN pip install poetry==2.2.1
+RUN pip install poetry==2.5.1
 
 # Copy dependency files first — Docker layer cache means this only
 # re-runs when dependencies change, not on every code change
