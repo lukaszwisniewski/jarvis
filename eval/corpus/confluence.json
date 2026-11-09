@@ -1,0 +1,13 @@
+{
+  "space": "Engineering",
+  "pages": [
+    {"id": "1001", "title": "Orders Service Architecture", "excerpt": "Overview of the orders service components and request flow.", "body": "<h1>Architecture</h1><p>The FastAPI API receives orders, reserves stock in Redis and stores orders in Postgres. A Celery worker sends email notifications. Payments are processed by Stripe.</p>"},
+    {"id": "1002", "title": "Payments Runbook", "excerpt": "What to do when payments fail, double charges or refunds go wrong.", "body": "<p>Duplicate charges: check the idempotency key in the payment service logs. Refunds: partial refunds are issued from the refund service. Webhook failures: confirm the Stripe webhook secret.</p>"},
+    {"id": "1003", "title": "Authentication and Session Policy", "excerpt": "How login, JWT access tokens and refresh tokens work.", "body": "<p>Access tokens are JWTs valid for 15 minutes. Clients call the refresh endpoint to get a new token. Passwords are verified on login.</p>"},
+    {"id": "1004", "title": "Deployment Process", "excerpt": "How code reaches production.", "body": "<p>CI builds a Docker image, pushes to ECR and updates the ECS service. Alembic migrations run before rollout. Rollback by redeploying the previous image.</p>"},
+    {"id": "1005", "title": "Database Schema and Migrations", "excerpt": "Tables in the orders database and how to change them.", "body": "<p>Tables: customers, orders, order_items. Orders reference customers. Schema changes use Alembic migrations.</p>"},
+    {"id": "1006", "title": "Email Notifications Design", "excerpt": "Order confirmation and shipping emails.", "body": "<p>Emails are sent by a Celery task. Failed sends are retried every 60 seconds up to 5 times.</p>"},
+    {"id": "1007", "title": "API Rate Limiting Policy", "excerpt": "Request limits for public API clients.", "body": "<p>Each client IP may make 60 requests per minute. Over the limit the API returns 429.</p>"},
+    {"id": "1008", "title": "Team Onboarding", "excerpt": "Start here if you are new to the team.", "body": "<p>Install tools, request access and read the architecture page.</p>"}
+  ]
+}

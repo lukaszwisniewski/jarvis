@@ -1,0 +1,81 @@
+{
+  "repo": "demo/orders-service",
+  "files": [
+    {
+      "path": "app/api/orders.py",
+      "content": "from fastapi import APIRouter\n\nrouter = APIRouter(prefix=\"/orders\")\n\n\n@router.get(\"/\")\ndef list_orders(customer_id: int):\n    return order_repository.list_for_customer(customer_id)\n\n\n@router.post(\"/\")\ndef create_order(payload: OrderCreate):\n    inventory.reserve_stock(payload.items)\n    order = order_repository.insert(payload)\n    email_tasks.send_order_confirmation.delay(order.id)\n    return order\n\n\n@router.delete(\"/{order_id}\")\ndef cancel_order(order_id: int):\n    inventory.release_stock(order_id)\n    return order_repository.mark_cancelled(order_id)\n"
+    },
+    {
+      "path": "app/api/auth.py",
+      "content": "from fastapi import APIRouter\n\nrouter = APIRouter(prefix=\"/auth\")\n\n\n@router.post(\"/login\")\ndef login(credentials: LoginRequest):\n    user = users.verify_password(credentials.email, credentials.password)\n    return {\"access_token\": jwt.create_access_token(user.id)}\n\n\n@router.post(\"/refresh\")\ndef refresh(token: str):\n    return {\"access_token\": jwt.refresh_access_token(token)}\n"
+    },
+    {
+      "path": "app/auth/jwt.py",
+      "content": "import datetime\n\nACCESS_TOKEN_EXPIRY_MINUTES = 15\n\n\ndef create_access_token(user_id: int) -> str:\n    expiry = datetime.datetime.utcnow() + datetime.timedelta(minutes=ACCESS_TOKEN_EXPIRY_MINUTES)\n    return encode({\"sub\": user_id, \"exp\": expiry})\n\n\ndef decode_token(token: str) -> dict:\n    return decode(token, verify_exp=True)\n\n\ndef refresh_access_token(token: str) -> str:\n    claims = decode_token(token)\n    return create_access_token(claims[\"sub\"])\n"
+    },
+    {
+      "path": "app/services/payment_service.py",
+      "content": "class PaymentService:\n    \"\"\"Charges customers through Stripe.\"\"\"\n\n    MAX_RETRIES = 3\n\n    def charge(self, order_id: int, amount_cents: int) -> str:\n        idempotency_key = f\"order-{order_id}\"\n        for attempt in range(self.MAX_RETRIES):\n            try:\n                return stripe.charge(amount_cents, idempotency_key=idempotency_key)\n            except StripeTimeout:\n                continue\n        raise PaymentFailed(order_id)\n"
+    },
+    {
+      "path": "app/services/refund_service.py",
+      "content": "class RefundService:\n    def refund(self, order_id: int, amount_cents: int | None = None) -> str:\n        payment = payments.get_for_order(order_id)\n        # partial refunds pass an explicit amount\n        amount = amount_cents or payment.amount_cents\n        return stripe.refund(payment.charge_id, amount)\n"
+    },
+    {
+      "path": "app/db/models.py",
+      "content": "class Customer(Base):\n    __tablename__ = \"customers\"\n    id = Column(Integer, primary_key=True)\n    email = Column(String, unique=True)\n\n\nclass Order(Base):\n    __tablename__ = \"orders\"\n    id = Column(Integer, primary_key=True)\n    customer_id = Column(Integer, ForeignKey(\"customers.id\"))\n    status = Column(String)\n    total_cents = Column(Integer)\n\n\nclass OrderItem(Base):\n    __tablename__ = \"order_items\"\n    order_id = Column(Integer, ForeignKey(\"orders.id\"))\n    sku = Column(String)\n    quantity = Column(Integer)\n"
+    },
+    {
+      "path": "app/db/order_repository.py",
+      "content": "LIST_SQL = \"\"\"\nSELECT o.id, o.status, o.total_cents, c.email\nFROM orders o JOIN customers c ON c.id = o.customer_id\nWHERE o.customer_id = :customer_id\n\"\"\"\n\n\ndef list_for_customer(customer_id: int):\n    return db.execute(LIST_SQL, {\"customer_id\": customer_id}).all()\n\n\ndef insert(payload):\n    return db.execute(\"INSERT INTO orders (customer_id, status) VALUES (:c, 'new')\", {\"c\": payload.customer_id})\n\n\ndef mark_cancelled(order_id: int):\n    return db.execute(\"UPDATE orders SET status = 'cancelled' WHERE id = :id\", {\"id\": order_id})\n"
+    },
+    {
+      "path": "app/workers/email_tasks.py",
+      "content": "@celery_app.task(bind=True, max_retries=5)\ndef send_order_confirmation(self, order_id: int) -> None:\n    order = order_repository.get(order_id)\n    try:\n        mailer.send(to=order.customer_email, template=\"order_confirmation\", order=order)\n    except MailerUnavailable as exc:\n        raise self.retry(exc=exc, countdown=60)\n"
+    },
+    {
+      "path": "app/services/inventory.py",
+      "content": "def reserve_stock(items) -> None:\n    for item in items:\n        redis.decrby(f\"stock:{item.sku}\", item.quantity)\n\n\ndef release_stock(order_id: int) -> None:\n    for item in order_items.for_order(order_id):\n        redis.incrby(f\"stock:{item.sku}\", item.quantity)\n"
+    },
+    {
+      "path": "app/cache/redis_cache.py",
+      "content": "CATALOG_TTL_SECONDS = 300\n\n\ndef get_product_catalog():\n    cached = redis.get(\"catalog\")\n    if cached:\n        return json.loads(cached)\n    catalog = products.load_all()\n    redis.setex(\"catalog\", CATALOG_TTL_SECONDS, json.dumps(catalog))\n    return catalog\n\n\ndef invalidate_catalog():\n    redis.delete(\"catalog\")\n"
+    },
+    {
+      "path": "app/config.py",
+      "content": "class Settings(BaseSettings):\n    database_url: str\n    redis_url: str = \"redis://localhost:6379/0\"\n    stripe_api_key: str\n    stripe_webhook_secret: str\n    smtp_host: str = \"localhost\"\n    rate_limit_per_minute: int = 60\n"
+    },
+    {
+      "path": "infra/main.tf",
+      "content": "resource \"aws_db_instance\" \"orders\" {\n  engine         = \"postgres\"\n  engine_version = \"15\"\n  instance_class = \"db.t3.medium\"\n}\n\nresource \"aws_ecs_service\" \"orders_api\" {\n  name          = \"orders-api\"\n  desired_count = 2\n}\n"
+    },
+    {
+      "path": "README.md",
+      "content": "# Orders service\n\nArchitecture: a FastAPI API receives orders, reserves stock in Redis, stores orders in Postgres and hands email notifications to a Celery worker. Payments go through Stripe. The process flow is: create order, reserve stock, charge payment, send confirmation.\n"
+    },
+    {
+      "path": "docs/deployment.md",
+      "content": "# Deployment\n\nMerges to main build a Docker image in CI, push it to ECR and roll out the ECS service orders-api. Database migrations run with Alembic before the rollout.\n"
+    },
+    {
+      "path": "tests/test_payment_service.py",
+      "content": "def test_charge_retries_on_timeout():\n    service = PaymentService()\n    assert service.charge(order_id=1, amount_cents=100)\n"
+    },
+    {
+      "path": "app/services/deprecated_pricing.py",
+      "content": "# Deprecated: use app/services/pricing.py\ndef apply_discount(total_cents, code):\n    return total_cents - lookup(code)\n"
+    },
+    {
+      "path": "app/services/pricing.py",
+      "content": "def apply_discount(order, code: str) -> int:\n    if order.discount_applied:\n        return order.total_cents\n    discount = discount_codes.lookup(code)\n    order.discount_applied = True\n    return max(0, order.total_cents - discount)\n"
+    },
+    {
+      "path": "app/api/webhooks.py",
+      "content": "@router.post(\"/webhooks/stripe\")\nasync def stripe_webhook(request: Request):\n    payload = await request.body()\n    signature = request.headers.get(\"Stripe-Signature\")\n    event = stripe.Webhook.construct_event(payload, signature, settings.stripe_webhook_secret)\n    handle_event(event)\n    return {\"received\": True}\n"
+    },
+    {
+      "path": "app/middleware/rate_limit.py",
+      "content": "class RateLimitMiddleware:\n    \"\"\"Fixed-window rate limiter per client IP, backed by Redis.\"\"\"\n\n    async def __call__(self, request, call_next):\n        key = f\"ratelimit:{request.client.host}\"\n        count = redis.incr(key)\n        redis.expire(key, 60)\n        if count > settings.rate_limit_per_minute:\n            return JSONResponse(status_code=429, content={\"detail\": \"Too many requests\"})\n        return await call_next(request)\n"
+    }
+  ]
+}
