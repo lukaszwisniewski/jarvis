@@ -3,7 +3,11 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from app.agent.graph import agent_retrieve_context, build_agent_graph
+from app.agent.graph import (
+    agent_retrieve_context,
+    build_agent_graph,
+    recursion_limit,
+)
 from app.retrieval.models import RetrievalResult
 
 
@@ -20,15 +24,18 @@ def text(value: str = "Done."):
 class FakeClaude:
     """Returns scripted responses in order and records every request."""
 
-    def __init__(self, *responses: list) -> None:
+    def __init__(self, *responses: list, stop_reason: str | None = None) -> None:
         self.responses = list(responses)
+        self.stop_reason = stop_reason  # None: derive it like the real API
         self.requests: list[dict] = []
         self.messages = self  # so client.messages.create(...) works
 
     def create(self, **kwargs):
         self.requests.append(kwargs)
         content = self.responses.pop(0) if self.responses else [text()]
-        return SimpleNamespace(content=content)
+        uses_tools = any(block.type == "tool_use" for block in content)
+        stop_reason = self.stop_reason or ("tool_use" if uses_tools else "end_turn")
+        return SimpleNamespace(content=content, stop_reason=stop_reason)
 
 
 def result(source: str, title: str, snippet: str = "snippet", score: float = 1.0):
@@ -105,7 +112,8 @@ async def test_stops_at_tool_round_limit(mock_retrieve) -> None:
 
     assert state["tool_rounds"] == 2
     assert mock_retrieve.await_count == 2
-    assert len(client.requests) == 3  # decide, tools, decide, tools, decide -> stop
+    # decide, tools, decide, tools -> finish: no wasted decide after the limit.
+    assert len(client.requests) == 2
 
 
 @pytest.mark.asyncio
@@ -202,3 +210,39 @@ async def test_excess_tool_calls_in_one_round_are_rejected(mock_retrieve) -> Non
     assert [r["tool_use_id"] for r in sent] == ["c0", "c1", "c2", "c3", "c4"]
     assert [r["is_error"] for r in sent] == [False, False, False, True, True]
     assert sent[3]["content"].startswith("Too many tool calls this round")
+
+
+@pytest.mark.asyncio
+@patch("app.agent.tools.retrieve_from_source", new_callable=AsyncMock)
+async def test_max_rounds_run_within_recursion_limit(mock_retrieve) -> None:
+    mock_retrieve.return_value = []
+    client = FakeClaude(*[[tool_call("search_jira", "more")] for _ in range(20)])
+    graph = build_agent_graph(client, model="fake", max_tool_rounds=8)
+
+    state = await graph.ainvoke(
+        {
+            "question": "q",
+            "scope": None,
+            "messages": [{"role": "user", "content": "q"}],
+            "results": [],
+            "tool_rounds": 0,
+            "context": "",
+        },
+        config={"recursion_limit": recursion_limit(8)},
+    )
+
+    assert state["tool_rounds"] == 8
+    assert len(client.requests) == 8
+
+
+@pytest.mark.asyncio
+@patch("app.agent.tools.retrieve_from_source", new_callable=AsyncMock)
+async def test_early_stop_reason_is_logged_as_warning(mock_retrieve, caplog) -> None:
+    client = FakeClaude([text("cut off")], stop_reason="max_tokens")
+
+    with caplog.at_level("INFO", logger="app.agent.graph"):
+        state = await run_graph(client)
+
+    assert state["context"] == ""
+    warnings = [r for r in caplog.records if r.levelname == "WARNING"]
+    assert any("stop_reason=max_tokens" in r.getMessage() for r in warnings)

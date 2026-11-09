@@ -2,8 +2,8 @@
 
 The graph has three nodes:
 
-    decide ──(tool calls and rounds left)──> run_tools ──> decide
-       └────(no tool calls, or limit hit)──> finish ──> END
+    decide ──(tool calls)──> run_tools ──(rounds left)──> decide
+       └──(no tool calls)──> finish <──(round limit hit)──┘
 
 `decide` asks Claude what to search, `run_tools` runs the searches, and `finish`
 ranks everything with the same rank_results() and build_context() as the fixed
@@ -27,6 +27,8 @@ from app.retrieval.pipeline import retrieve_context
 from app.retrieval.retrieval_service import rank_results
 
 logger = logging.getLogger(__name__)
+
+_EARLY_STOPS = {"max_tokens", "refusal"}
 
 # At most this many searches run per round (one per source). Extra tool calls
 # get an error result, because every tool_use block needs a tool_result.
@@ -65,15 +67,31 @@ def build_agent_graph(client, model: str, max_tool_rounds: int):
             messages=state["messages"],
         )
         assistant = {"role": "assistant", "content": response.content}
+
+        # stop_reason explains odd runs: "max_tokens" can cut a tool call short
+        # and "refusal" ends the search early. Both end in finish, not a crash.
+        stop_reason = getattr(response, "stop_reason", None)
+        level = logging.WARNING if stop_reason in _EARLY_STOPS else logging.INFO
+        logger.log(
+            level,
+            "agent decide: stop_reason=%s tool_calls=%s",
+            stop_reason,
+            len(_tool_calls(assistant)),
+        )
         return {"messages": state["messages"] + [assistant]}
 
     def route_after_decide(state: AgentState) -> str:
-        wants_tools = bool(_tool_calls(state["messages"][-1]))
-        # The round limit is the cost guard: at most max_tool_rounds rounds of
-        # searches, however many times Claude asks for more.
-        if wants_tools and state["tool_rounds"] < max_tool_rounds:
+        if _tool_calls(state["messages"][-1]):
             return "run_tools"
         return "finish"
+
+    def route_after_tools(state: AgentState) -> str:
+        # The round limit is the cost guard for Claude calls: after the last
+        # allowed round we go straight to finish, because another decide call
+        # could not change the result.
+        if state["tool_rounds"] >= max_tool_rounds:
+            return "finish"
+        return "decide"
 
     async def run_tools(state: AgentState) -> dict:
         calls = _tool_calls(state["messages"][-1])
@@ -126,9 +144,19 @@ def build_agent_graph(client, model: str, max_tool_rounds: int):
     graph.add_node("finish", finish)
     graph.add_edge(START, "decide")
     graph.add_conditional_edges("decide", route_after_decide, ["run_tools", "finish"])
-    graph.add_edge("run_tools", "decide")
+    graph.add_conditional_edges("run_tools", route_after_tools, ["decide", "finish"])
     graph.add_edge("finish", END)
     return graph.compile()
+
+
+def recursion_limit(max_tool_rounds: int) -> int:
+    """LangGraph step limit for a run with at most max_tool_rounds rounds.
+
+    The longest run (the round limit is reached) needs 2 * rounds + 2 steps as
+    LangGraph counts them; measured as 18 for 8 rounds. Two spare steps are
+    added so a normal run can never hit the limit.
+    """
+    return 2 * max_tool_rounds + 4
 
 
 async def agent_retrieve_context(
@@ -158,7 +186,10 @@ async def agent_retrieve_context(
             "results": [],
             "tool_rounds": 0,
             "context": "",
-        }
+        },
+        # Set explicitly so the graph does not depend on library defaults or
+        # the LANGGRAPH_DEFAULT_RECURSION_LIMIT environment variable.
+        config={"recursion_limit": recursion_limit(settings.agent_max_tool_rounds)},
     )
     logger.info(
         "agent finished: tool_rounds=%s results=%s",

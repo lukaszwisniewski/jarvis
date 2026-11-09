@@ -198,8 +198,8 @@ Ruff and the test suite run in GitHub Actions on every push and pull request (se
 By default JARVIS runs a fixed pipeline. It generates search queries, queries GitHub, Jira and Confluence at the same time, ranks the results and synthesises an answer. With `AGENT_MODE=true`, the evidence-gathering step is replaced by a small [LangGraph](https://github.com/langchain-ai/langgraph) agent in `app/agent/`:
 
 ```text
-decide ──(tool calls, rounds left)──> run_tools ──> decide
-   └────(no tool calls, or limit hit)──> finish ──> END
+decide ──(tool calls)──> run_tools ──(rounds left)──> decide
+   └──(no tool calls)──> finish <──(round limit hit)──┘
 ```
 
 - **decide:** Claude (`ANTHROPIC_MODEL_FAST`) sees the question and three tools: `search_github`, `search_jira` and `search_confluence`. It calls the ones it thinks will help, with short keyword queries.
@@ -213,7 +213,7 @@ After that, both modes do the same thing: answer synthesis through `ask_llm`, th
 
 | | Fixed pipeline (default) | Agent mode |
 |---|---|---|
-| Claude calls per question | 2: query generation and synthesis | N + 2 for N tool rounds: one decide call per round, a final decide, and synthesis. That is up to 6 with the default limit |
+| Claude calls per question | 2: query generation and synthesis | One decide call per tool round, one more if Claude stops searching by itself, and synthesis. That is at most `AGENT_MAX_TOOL_ROUNDS` + 1, so 5 with the default limit |
 | Source calls | All three sources, every time, in parallel | Only the sources Claude picks. Rounds run one after another, which adds latency |
 | Queries per source | Up to 5 generated queries | One query per tool call. Claude can retry with different keywords |
 | Repeatability | The search plan is fixed; only the generated queries can vary | Which sources are searched, and how often, can differ between runs |
