@@ -59,6 +59,11 @@ class Settings(BaseSettings):
     # Set to true to bypass real Anthropic API calls (dev/test environments)
     llm_stub_mode: bool = False
 
+    # Agent mode (off by default): Claude chooses which sources to search via
+    # tools, for at most agent_max_steps rounds of tool calls.
+    agent_mode: bool = False
+    agent_max_steps: int = 4
+
     # Retrieval policy (data-driven; can be tuned via env)
     retrieval_source_caps: dict[str, int] = {
         "github": 6,
