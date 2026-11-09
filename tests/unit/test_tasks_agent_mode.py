@@ -4,10 +4,9 @@ from app.config import settings
 from app.workers.tasks import _build_context
 
 
-def test_agent_mode_is_off_by_default() -> None:
-    assert settings.agent_mode is False
-
-
+# The default value itself is checked in test_agent_config.py without .env.
+# Here the flag is patched explicitly, so a local .env cannot change the result.
+@patch.object(settings, "agent_mode", False)
 @patch("app.workers.tasks.agent_retrieve_context", new_callable=AsyncMock)
 @patch("app.workers.tasks.retrieve_context", new_callable=AsyncMock)
 def test_default_uses_fixed_pipeline(mock_pipeline, mock_agent) -> None:

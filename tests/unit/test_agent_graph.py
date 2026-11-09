@@ -8,6 +8,8 @@ from app.agent.graph import (
     build_agent_graph,
     recursion_limit,
 )
+from app.agent.tools import MAX_TOOL_OUTPUT_CHARS, format_tool_output, run_tool
+from app.config import settings
 from app.retrieval.models import RetrievalResult
 
 
@@ -183,9 +185,9 @@ async def test_no_tool_calls_gives_empty_context(mock_retrieve) -> None:
 
 
 @pytest.mark.asyncio
+@patch.object(settings, "llm_stub_mode", True)
 @patch("app.agent.graph.retrieve_context", new_callable=AsyncMock)
 async def test_stub_mode_falls_back_to_fixed_pipeline(mock_pipeline) -> None:
-    # conftest.py sets LLM_STUB_MODE=true, so no real client is created.
     mock_pipeline.return_value = "pipeline context"
 
     context = await agent_retrieve_context("question", scope="python")
@@ -246,3 +248,74 @@ async def test_early_stop_reason_is_logged_as_warning(mock_retrieve, caplog) -> 
     assert state["context"] == ""
     warnings = [r for r in caplog.records if r.levelname == "WARNING"]
     assert any("stop_reason=max_tokens" in r.getMessage() for r in warnings)
+
+
+@pytest.mark.asyncio
+@patch("app.agent.tools.retrieve_from_source", new_callable=AsyncMock)
+async def test_several_successful_tool_calls_in_one_round(mock_retrieve) -> None:
+    mock_retrieve.side_effect = [
+        [result("github", "app/auth/jwt.py")],
+        [result("jira", "ORD-102")],
+    ]
+    client = FakeClaude(
+        [
+            tool_call("search_github", "jwt", call_id="g"),
+            tool_call("search_jira", "token expiry", call_id="j"),
+        ],
+        [text()],
+    )
+
+    state = await run_graph(client)
+
+    assert state["tool_rounds"] == 1
+    # Claude's tool_use message is sent back before the results...
+    second_request = client.requests[1]["messages"]
+    assert second_request[1]["role"] == "assistant"
+    assert [b.id for b in second_request[1]["content"]] == ["g", "j"]
+    # ...and both results arrive together in one user message.
+    sent = tool_results_sent(client, 1)
+    assert [(r["tool_use_id"], r["is_error"]) for r in sent] == [
+        ("g", False),
+        ("j", False),
+    ]
+    assert "[GITHUB]" in state["context"] and "[JIRA]" in state["context"]
+
+
+@pytest.mark.asyncio
+@patch("app.agent.tools.retrieve_from_source", new_callable=AsyncMock)
+async def test_same_result_in_two_rounds_is_kept_once(mock_retrieve) -> None:
+    mock_retrieve.side_effect = [
+        [result("jira", "ORD-101")],
+        [result("jira", "ORD-101"), result("jira", "ORD-109")],
+    ]
+    client = FakeClaude(
+        [tool_call("search_jira", "duplicate charge")],
+        [tool_call("search_jira", "charged twice")],
+        [text()],
+    )
+
+    state = await run_graph(client)
+
+    assert [r.title for r in state["results"]] == ["ORD-101", "ORD-109"]
+    assert state["context"].count("Title: ORD-101") == 1
+
+
+def test_tool_output_is_truncated_before_wrapping() -> None:
+    long_snippet = "x" * (MAX_TOOL_OUTPUT_CHARS * 3)
+
+    output = format_tool_output([result("github", "big.py", snippet=long_snippet)])
+
+    tags = len("<retrieved_context>\n") + len("\n</retrieved_context>")
+    assert len(output) == MAX_TOOL_OUTPUT_CHARS + tags
+    assert output.endswith("</retrieved_context>")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tool_input", [{}, {"query": 42}, "not a dict", None])
+async def test_run_tool_rejects_missing_or_malformed_input(tool_input) -> None:
+    # A response cut off by max_tokens can leave a tool call without input.
+    text_out, results, is_error = await run_tool("search_jira", tool_input)
+
+    assert is_error is True
+    assert results == []
+    assert text_out.startswith("Invalid input")
