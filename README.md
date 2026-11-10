@@ -237,24 +237,36 @@ Agent mode is a demonstration of tool-based retrieval, not a measured improvemen
 
 ### Logs
 
-Both processes write one JSON object per line to stderr. Set `LOG_FORMAT=text` for a readable format with the same fields.
+After logging is configured, both processes write one JSON object per line to stderr.
+
+A few startup lines are plain text, because they are written before or outside that setup:
+- the Celery worker's startup banner;
+- the `cleared N metric files` line from the worker's container-start step;
+- Uvicorn's own startup and reloader lines in its parent process.
 
 ```json
 {"timestamp": "2026-11-10T13:56:31.808+00:00", "level": "INFO", "logger": "celery.worker.strategy", "process": "MainProcess", "message": "Task app.workers.tasks.process_jarvis_query[3157d1ed-...] received", "correlation_id": "3157d1ed-..."}
 ```
 
-Fields: `timestamp` (UTC), `level`, `logger`, `process`, `message`, `correlation_id`, and, when present, `client_request_id` and `exception`.
+JSON fields: `timestamp` (UTC), `level`, `logger`, `process`, `message`, `correlation_id`, and, when present, `client_request_id` and `exception`.
+
+`LOG_FORMAT=text` gives a readable line with the time, level, logger, `correlation_id` and message, followed by the traceback if there is one. It has no `process` or `client_request_id` field.
 
 **Correlation ID**
 - The API generates a UUID for every request. It returns it in the `X-Correlation-ID` response header and uses it as the Celery task ID.
 - The worker sets it for the task's duration (`task_prerun` / `task_postrun`), so the task's own log lines carry it.
 - Celery's own lines (received, retry, succeeded, failed) carry the same value. Celery attaches the task ID to those log records, including the "received" line that is logged before the task starts.
 - Celery keeps the task ID on retries, so every attempt has the same `correlation_id`.
-- A client's `X-Request-ID` header is never used as the task ID. It is only logged as `client_request_id`, truncated to 128 characters.
+- A client's `X-Request-ID` header is never used as the task ID. It is only logged as `client_request_id` (JSON format only), truncated to 128 characters.
 
 **What the logs contain.** The logs are not free of personal or sensitive data:
 - Queries, result titles and snippets, the raw Claude query response, and the 2,000-character context preview are logged only at `DEBUG`.
-- At `INFO` and `WARNING`, lines carry counts and error types. Exception messages can still contain request URLs, which include search query text.
+- At `INFO` and `WARNING`, the application's own lines carry counts and error types.
+- Exception text still reaches the logs, and it can contain request URLs that include search query text. This covers Jira and Confluence query warnings, and Celery's retry and failure lines, which include the exception message and, for failures, the traceback.
+- Celery's task log records also carry the task arguments (`record.args` / `record.data`). The JSON and text formats do not print them, but other handlers could.
+- **Slack response URLs are never logged.** They let anyone post into the user's Slack, so they are treated as credentials:
+  - The `httpx` and `httpcore` loggers are kept at `WARNING`, even with `LOG_LEVEL=DEBUG`, because httpx logs every request URL at `INFO`.
+  - A filter on the log handler replaces any `hooks*.slack.com` URL with `[REDACTED_SLACK_URL]` in the message, the exception text and the Celery task data. Tests cover retries, retries running out and a 4xx response, at `INFO` and `DEBUG`, in both formats.
 - Treat logs as sensitive at every level.
 
 ### Metrics
@@ -291,7 +303,8 @@ Failed search queries are counted in `jarvis_source_query_errors_total{source}`.
 **Why the worker has its own endpoint.**
 - The Celery worker uses the prefork pool, so tasks run in forked child processes that each keep their own metric values.
 - Docker Compose sets `PROMETHEUS_MULTIPROC_DIR` for the worker only, on a `tmpfs` mount. Every process writes its values to files there, and the worker parent serves their sum on port 9100.
-- Old files would be added to the new totals, so the directory is cleared by a separate command (`python -m app.observability.worker_metrics`) before Celery starts, never inside the running worker.
+- Old files would be added to the new totals, so the directory is cleared by a separate command (`python -m app.observability.worker_metrics`) before Celery starts, never inside the running worker. With the `tmpfs` mount the directory is already empty at container start; the clearing step matters when the worker runs with a persistent directory.
+- Each worker process writes its own files. When Celery replaces a child process (after a crash, or with `max_tasks_per_child` if that is ever set), the old process's files stay until the worker container restarts. Their counts remain part of the totals, as they should for counters, and the directory grows slowly.
 - The API imports the worker code, so it has the worker metrics in memory too. It serves only its own registry, so they do not appear on `:8000/metrics`.
 
 ### Optional: local Prometheus and Grafana
@@ -364,3 +377,12 @@ The output goes to `eval/results/judge.json`, which is gitignored. No judge resu
 - Prompt-injection handling is a prompt-level mitigation (untrusted-content instructions and delimiters), not complete protection.
 
 JARVIS is intended to demonstrate practical backend engineering: API integration, asynchronous processing, retrieval orchestration, failure handling, testing, and LLM integration.
+
+## How this was built
+
+I wrote the original JARVIS pipeline (Slack command, retrieval, and answer synthesis). Subsequent additions — offline evaluation, agent mode, and observability — were designed and specified by me, then implemented with Claude Code, an AI coding assistant. Commits made with its assistance include a `Co-Authored-By` line.
+
+- **My role:** architecture and design decisions, requirements (including security constraints and operational limits), evaluation criteria and CI thresholds, review of every pull request, and final decisions on each change.
+- **Claude Code's role:** implementing approved designs, writing the synthetic evaluation corpus and labelled questions (which I reviewed and approved), tests, and initial documentation drafts.
+
+Changes were validated through automated tests, retrieval evaluation, my own review, and an independent AI review agent before merging.
