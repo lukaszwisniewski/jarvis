@@ -146,3 +146,54 @@ async def test_retrieve_propagates_cancelled_error(
 
     with pytest.raises(asyncio.CancelledError):
         await retrieve(["thumbnail generation"])
+
+
+@pytest.mark.asyncio
+@patch("app.retrieval.retrieval_service.JiraProvider")
+async def test_retrieve_from_source_searches_only_that_source(
+    mock_jira_provider_cls,
+) -> None:
+    from app.retrieval.retrieval_service import retrieve_from_source
+
+    expected = [RetrievalResult(source="jira", title="t", snippet="", score=1.0)]
+    mock_jira_provider_cls.return_value.search = AsyncMock(return_value=expected)
+
+    assert await retrieve_from_source("jira", ["login"]) == expected
+    mock_jira_provider_cls.return_value.search.assert_awaited_once_with(["login"])
+
+
+@pytest.mark.asyncio
+@patch("app.retrieval.retrieval_service.JiraProvider")
+async def test_retrieve_from_source_raises_provider_errors(
+    mock_jira_provider_cls,
+) -> None:
+    from app.retrieval.retrieval_service import retrieve_from_source
+
+    mock_jira_provider_cls.return_value.search = AsyncMock(
+        side_effect=RuntimeError("jira down")
+    )
+
+    with pytest.raises(RuntimeError, match="jira down"):
+        await retrieve_from_source("jira", ["login"])
+
+
+@pytest.mark.asyncio
+async def test_retrieve_from_source_rejects_unknown_source() -> None:
+    from app.retrieval.retrieval_service import retrieve_from_source
+
+    with pytest.raises(ValueError, match="unknown retrieval source"):
+        await retrieve_from_source("slack", ["login"])
+
+
+def test_rank_results_applies_source_caps() -> None:
+    from app.retrieval.retrieval_service import rank_results
+
+    confluence = [
+        RetrievalResult(source="confluence", title=f"p{i}", snippet="", score=i)
+        for i in range(3)
+    ]
+
+    ranked = rank_results({"confluence": confluence})
+
+    # Default cap keeps one Confluence page: the best-scoring one.
+    assert [r.title for r in ranked] == ["p2"]
