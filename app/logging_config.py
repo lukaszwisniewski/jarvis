@@ -92,16 +92,30 @@ class SlackUrlRedactingFilter(logging.Filter):
         # exception here would reach the code that logged. Never raise.
         try:
             self._redact(record)
-        except Exception:
-            # Last resort: drop everything that could carry a URL.
-            record.msg = "[log record dropped: redaction failed]"
-            record.args = None
-            record.exc_info = None
-            record.exc_text = None
-            record.stack_info = None
-            if hasattr(record, "data"):
-                record.data = None
-        return True
+            return True
+        except Exception as exc:
+            try:
+                self._drop(record, exc)
+                return True
+            except Exception:
+                # Even dropping failed: emit nothing rather than risk raising
+                # or writing an unredacted URL.
+                return False
+
+    @staticmethod
+    def _drop(record: logging.LogRecord, exc: Exception) -> None:
+        """Replace everything that could carry a URL with a short diagnostic.
+
+        Only the exception's type name is kept, never its message or repr,
+        because those can contain the URL being redacted.
+        """
+        record.msg = f"[log record dropped: redaction failed ({type(exc).__name__})]"
+        record.args = None
+        record.exc_info = None
+        record.exc_text = None
+        record.stack_info = None
+        if hasattr(record, "data"):
+            record.data = None
 
     def _redact(self, record: logging.LogRecord) -> None:
         try:

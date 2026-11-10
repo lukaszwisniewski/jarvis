@@ -174,7 +174,9 @@ def test_filter_never_raises_even_if_redaction_itself_fails(monkeypatch) -> None
     record.data = {"kwargs": SLACK_URL}
 
     assert SlackUrlRedactingFilter().filter(record) is True
-    assert record.getMessage() == "[log record dropped: redaction failed]"
+    assert record.getMessage() == (
+        "[log record dropped: redaction failed (RuntimeError)]"
+    )
     assert record.data is None
 
 
@@ -219,3 +221,80 @@ def test_text_around_the_url_is_kept() -> None:
     )
     SlackUrlRedactingFilter().filter(record)
     assert record.getMessage() == f"posting to ({SLACK_URL_REDACTED}) failed: 503"
+
+
+@pytest.mark.parametrize("log_format", ["json", "text"])
+def test_redaction_failure_through_the_real_handler_leaks_nothing(
+    restore_logging, capsys, monkeypatch, log_format
+) -> None:
+    configure_logging("DEBUG", log_format)
+
+    def broken(text):
+        # The exception message itself contains the URL: it must not be
+        # copied into the fallback line.
+        raise ValueError(f"cannot redact {SLACK_URL}")
+
+    monkeypatch.setattr("app.logging_config.redact_slack_urls", broken)
+
+    logging.getLogger("test.redaction.broken").error(
+        "posting to %s failed", SLACK_URL, extra={"data": {"kwargs": SLACK_URL}}
+    )  # must not raise
+
+    err = capsys.readouterr().err
+    assert "[log record dropped: redaction failed (ValueError)]" in err
+    assert TOKEN not in err
+    assert "hooks.slack.com" not in err
+    if log_format == "json":
+        lines = [json.loads(line) for line in err.splitlines() if line.strip()]
+        assert len(lines) == 1
+
+
+class MessageThatCannotBeFormatted:
+    """str() raises, so record.getMessage() raises; repr() carries the URL."""
+
+    def __str__(self) -> str:
+        raise RuntimeError("str failed")
+
+    def __repr__(self) -> str:
+        return f"<message for {SLACK_URL}>"
+
+
+@pytest.mark.parametrize("log_format", ["json", "text"])
+def test_get_message_raising_is_handled_and_redacted(
+    restore_logging, capsys, log_format
+) -> None:
+    configure_logging("DEBUG", log_format)
+
+    logging.getLogger("test.redaction.getmessage").info(
+        MessageThatCannotBeFormatted()
+    )  # must not raise
+
+    err = capsys.readouterr().err
+    assert "[unformattable log message]" in err
+    assert SLACK_URL_REDACTED in err
+    assert TOKEN not in err
+    assert "hooks.slack.com" not in err
+
+
+class RecordThatRejectsChanges(logging.LogRecord):
+    """A record whose attributes cannot be changed after creation."""
+
+    def __setattr__(self, name, value):
+        if getattr(self, "_frozen", False):
+            raise AttributeError(f"cannot set {name}")
+        super().__setattr__(name, value)
+
+
+def test_filter_returns_false_when_even_dropping_fails(monkeypatch) -> None:
+    def broken(text):
+        raise ValueError("redaction broke")
+
+    monkeypatch.setattr("app.logging_config.redact_slack_urls", broken)
+    record = RecordThatRejectsChanges(
+        "x", logging.INFO, __file__, 1, "sent to %s", (SLACK_URL,), None
+    )
+    record._frozen = True
+
+    # Neither redaction nor the drop fallback can change the record, so the
+    # filter tells the handler not to emit it, without raising.
+    assert SlackUrlRedactingFilter().filter(record) is False
