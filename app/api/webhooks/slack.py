@@ -12,6 +12,7 @@ from fastapi import (
 from app.config import settings
 from app.exceptions import SlackVerificationError
 from app.observability.context import correlation_id, new_correlation_id
+from app.observability.metrics import TASKS_ENQUEUED
 from app.slack.client import verify_slack_request
 from app.workers.tasks import process_jarvis_query
 
@@ -136,15 +137,21 @@ async def slash_command(
     # The request's correlation ID becomes the Celery task ID, so the worker
     # (and Celery's own log lines) carry the same ID without extra plumbing.
     cid = correlation_id.get() or new_correlation_id()
-    process_jarvis_query.apply_async(
-        kwargs={
-            "query": query_text,
-            "response_url": response_url,
-            "user_id": user_id,
-            "scope": scope,
-        },
-        task_id=cid,
-    )
+    try:
+        process_jarvis_query.apply_async(
+            kwargs={
+                "query": query_text,
+                "response_url": response_url,
+                "user_id": user_id,
+                "scope": scope,
+            },
+            task_id=cid,
+        )
+    except Exception:
+        # Still a 500 for Slack, as before; the counter makes it visible.
+        TASKS_ENQUEUED.labels(outcome="error").inc()
+        raise
+    TASKS_ENQUEUED.labels(outcome="success").inc()
     logger.info("slash command accepted; task enqueued")
 
     # Must return within 3 seconds — heavy work happens in the Celery task
