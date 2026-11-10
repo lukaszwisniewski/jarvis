@@ -267,6 +267,7 @@ JSON fields: `timestamp` (UTC), `level`, `logger`, `process`, `message`, `correl
 - **Slack response URLs are never logged.** They let anyone post into the user's Slack, so they are treated as credentials:
   - The `httpx` and `httpcore` loggers are kept at `WARNING`, even with `LOG_LEVEL=DEBUG`, because httpx logs every request URL at `INFO`.
   - A filter on the log handler replaces any `hooks*.slack.com` URL with `[REDACTED_SLACK_URL]` in the message, the exception text and the Celery task data. Tests cover retries, retries running out and a 4xx response, at `INFO` and `DEBUG`, in both formats.
+  - This protects the logs only. The `response_url` is a task argument, so it travels in every Celery message through Redis, and the result backend can keep it in stored failure details (an `HTTPStatusError` message contains the URL). Treat Redis as trusted internal infrastructure and never expose it.
 - Treat logs as sensitive at every level.
 
 ### Metrics
@@ -373,6 +374,7 @@ The output goes to `eval/results/judge.json`, which is gitignored. No judge resu
 - Conversation history is not persisted as long-term assistant memory.
 - Agent mode is optional, off by default and not covered by the offline evaluation.
 - If posting the answer to Slack fails with a timeout, a network error or a 5xx response, Celery retries the whole task, up to 2 times. A retry reruns retrieval and every Claude call. If Slack had already accepted the first post (for example, a timeout after delivery), the user receives the answer twice. This is not prevented. Retries are counted in `jarvis_task_retries_total`.
+- Slack `response_url` values are kept out of the logs, but they are stored in Redis: in Celery task messages, and in the result backend when a task fails. Redis has no password in the Compose setup and must stay internal.
 - Logs are not PII-free (see [Observability](#observability)). There is no distributed tracing; requests are correlated through the `correlation_id` log field only.
 - Prompt-injection handling is a prompt-level mitigation (untrusted-content instructions and delimiters), not complete protection.
 
