@@ -5,6 +5,7 @@ setup_logging installs."""
 import io
 import json
 import logging
+import re
 import uuid
 from unittest.mock import patch
 
@@ -93,23 +94,70 @@ def test_retry_reasons_exhaustion_and_client_error(
     assert metric(DURATION, mode="pipeline", outcome="retry") == before["retry"] + 3
     assert metric(DURATION, mode="pipeline", outcome="success") == before["success"] + 1
     assert metric(DURATION, mode="pipeline", outcome="failure") == before["failure"] + 2
-    # The 404 was posted once (no retry); the 503s three times.
-    posts = fake_slack.posts
-    assert posts.count("https://hooks.slack.com/commands/client_error") == 1
-    assert posts.count("https://hooks.slack.com/commands/exhausted") == 3
+    # Exact POSTs per flow, and every scripted response was actually served.
+    # (FakeSlack records a POST before looking up its script, so the count
+    # alone would also match a KeyError from an unscripted URL; an emptied
+    # script proves the intended response was returned.)
+    urls = {name: f"https://hooks.slack.com/commands/{name}" for name in flows}
+    assert fake_slack.posts.count(urls["network"]) == 2  # ConnectError, then 200
+    assert fake_slack.posts.count(urls["exhausted"]) == 3  # 503, 503, 503
+    assert fake_slack.posts.count(urls["client_error"]) == 1  # 404, no retry
+    assert len(fake_slack.posts) == 6
+    for name, url in urls.items():
+        remaining = fake_slack.scripts.get(url)
+        assert remaining == [], f"{name}: scripted responses not used: {remaining}"
 
-    # Celery's failure line carries the correlation ID as an attribute.
-    for name in ("exhausted", "client_error"):
-        failed = [
+    def celery_lines(task_id: str, pattern: str) -> list[logging.LogRecord]:
+        """Celery's own lines for one task, matched by its message format."""
+        regex = re.compile(rf"\[{re.escape(task_id)}\] {pattern}")
+        return [
             r
             for r in collector.records
-            if "raised" in r.getMessage()
-            and isinstance(getattr(r, "data", None), dict)
-            and r.data.get("id") == task_ids[name]
+            if r.name.startswith("celery") and regex.search(r.getMessage())
         ]
-        assert len(failed) == 1
+
+    # Retry lines use Celery's format "Task <name>[<id>] retry: <exc>".
+    network_retries = celery_lines(task_ids["network"], "retry: ")
+    assert len(network_retries) == 1
+    assert "ConnectError" in network_retries[0].getMessage()  # the first attempt
+    exhausted_retries = celery_lines(task_ids["exhausted"], "retry: ")
+    assert len(exhausted_retries) == 2
+    assert all("503" in r.getMessage() for r in exhausted_retries)
+    assert celery_lines(task_ids["client_error"], "retry: ") == []
+
+    # Final outcomes.
+    assert len(celery_lines(task_ids["network"], "succeeded")) == 1  # retry worked
+    assert celery_lines(task_ids["network"], "raised") == []
+    expected_failures = {
+        "exhausted": "'503 Service Unavailable'",
+        "client_error": "'404 Not Found'",
+    }
+    for name, status in expected_failures.items():
+        failed = celery_lines(task_ids[name], "raised")
+        assert len(failed) == 1, name
         assert failed[0].levelno == logging.ERROR
+        # Celery cannot pickle HTTPStatusError (it needs request/response), so
+        # the logged exception object is a plain httpx.HTTPError without
+        # .response; exc_info[0] keeps the original type. The status is
+        # therefore checked in the error message.
+        exc_type, error, _ = failed[0].exc_info
+        assert exc_type is httpx.HTTPStatusError, (name, exc_type)
+        assert status in str(error), (name, str(error))
+        # Celery's failure line carries the correlation ID as an attribute.
         assert failed[0].correlation_id == task_ids[name]
+        assert celery_lines(task_ids[name], "succeeded") == []
+
+    # Nothing else failed, and no unexpected exception (such as a KeyError
+    # from an unscripted URL) was raised or logged anywhere.
+    all_failures = [
+        r
+        for r in collector.records
+        if r.name.startswith("celery") and " raised " in r.getMessage()
+    ]
+    assert len(all_failures) == 2
+    for record in collector.records:
+        text = record.getMessage() + (record.exc_text or "")
+        assert "KeyError" not in text, record.getMessage()[:80]
 
     # The handler installed by setup_logging writes one JSON object per line,
     # with the correlation ID on Celery's own lines.
