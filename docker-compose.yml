@@ -25,9 +25,17 @@ services:
       - REDIS_URL=redis://redis:6379/0
       - NO_PROXY=localhost,127.0.0.1,redis
       - no_proxy=localhost,127.0.0.1,redis
+      # Worker only: prefork children write metric values to files here, and
+      # the worker parent serves their sum on port 9100.
+      - PROMETHEUS_MULTIPROC_DIR=/tmp/jarvis-metrics
+    tmpfs:
+      - /tmp/jarvis-metrics
+    ports:
+      - "9100:9100"
     depends_on:
       - redis
-    command: celery -A app.workers.celery_app:celery_app worker --loglevel=info
+    # Clear old metric files in a separate step before Celery starts.
+    command: sh -c "python -m app.observability.worker_metrics && exec celery -A app.workers.celery_app:celery_app worker --loglevel=info"
 
   redis:
     image: redis:7-alpine

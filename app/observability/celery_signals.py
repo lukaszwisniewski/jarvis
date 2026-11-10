@@ -11,6 +11,7 @@ from celery import signals
 from app.config import settings
 from app.logging_config import configure_logging
 from app.observability.context import correlation_id
+from app.observability.worker_metrics import start_worker_metrics_server
 
 # task_id -> token, so task_postrun can restore the previous value.
 _tokens: dict[str, Token] = {}
@@ -22,6 +23,14 @@ def setup_worker_logging(loglevel=None, **kwargs) -> None:
     # setup, so Celery's lines use our JSON handler too. Child processes
     # inherit this setup through fork (Celery does not redo it).
     configure_logging(loglevel or settings.log_level, settings.log_format)
+
+
+@signals.worker_init.connect
+def start_metrics_endpoint(**kwargs) -> None:
+    # Runs once in the worker parent, before the pool forks children. It only
+    # starts the HTTP server; the metrics directory is cleared before Celery
+    # starts (see app/observability/worker_metrics.py), never here.
+    start_worker_metrics_server(settings.worker_metrics_port)
 
 
 @signals.task_prerun.connect

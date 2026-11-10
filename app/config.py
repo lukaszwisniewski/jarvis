@@ -64,6 +64,10 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
     log_format: Literal["json", "text"] = "json"
 
+    # Port of the worker's metrics endpoint. The endpoint only starts when
+    # PROMETHEUS_MULTIPROC_DIR is set (docker-compose sets it for the worker).
+    worker_metrics_port: int = 9100
+
     # Agent mode (off by default): Claude chooses which sources to search via
     # tools, for at most agent_max_tool_rounds rounds of tool calls. The upper
     # bound keeps cost predictable; an out-of-range value fails at startup.
