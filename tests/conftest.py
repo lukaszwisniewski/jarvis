@@ -22,17 +22,38 @@ TEST_RESULT_BACKEND = "cache+memory://"
 celery_app.conf.update(broker_url=TEST_BROKER_URL, result_backend=TEST_RESULT_BACKEND)
 
 
+def _changed_celery_settings() -> list[str]:
+    """Describe each Celery transport setting that no longer has its test value."""
+    expected = {
+        "broker_url": TEST_BROKER_URL,
+        "result_backend": TEST_RESULT_BACKEND,
+    }
+    return [
+        f"Celery {name} was changed to {getattr(celery_app.conf, name)!r}; "
+        f"tests must use {value!r}"
+        for name, value in expected.items()
+        if getattr(celery_app.conf, name) != value
+    ]
+
+
 @pytest.fixture(autouse=True)
 def celery_uses_in_memory_transport():
-    """Fail fast if an earlier test changed Celery's broker or backend."""
-    assert celery_app.conf.broker_url == TEST_BROKER_URL, (
-        f"Celery broker_url was changed to {celery_app.conf.broker_url!r}; "
-        f"tests must use {TEST_BROKER_URL!r}"
-    )
-    assert celery_app.conf.result_backend == TEST_RESULT_BACKEND, (
-        f"Celery result_backend was changed to {celery_app.conf.result_backend!r}; "
-        f"tests must use {TEST_RESULT_BACKEND!r}"
-    )
+    """Fail if a test changes Celery's broker or result backend.
+
+    Before the test: catches a change made earlier (e.g. at import time).
+    After the test: catches a change made by this test, so the failure is
+    reported in the test that made it. The test values are put back first,
+    so the following tests start clean.
+    """
+    changed = _changed_celery_settings()
+    assert not changed, "; ".join(changed)
+    yield
+    changed = _changed_celery_settings()
+    if changed:
+        celery_app.conf.update(
+            broker_url=TEST_BROKER_URL, result_backend=TEST_RESULT_BACKEND
+        )
+    assert not changed, "; ".join(changed)
 
 
 @pytest.fixture
