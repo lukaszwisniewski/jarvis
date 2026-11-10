@@ -1,9 +1,22 @@
+import logging
 from unittest.mock import AsyncMock, patch
 
 from fastapi.testclient import TestClient
 
+from app.logging_config import CorrelationIdFilter
 from app.main import app
 from app.observability.metrics import API_REGISTRY
+
+
+class ListHandler(logging.Handler):
+    def __init__(self) -> None:
+        super().__init__(level=logging.DEBUG)
+        self.records: list[logging.LogRecord] = []
+        self.addFilter(CorrelationIdFilter())
+
+    def emit(self, record: logging.LogRecord) -> None:
+        self.records.append(record)
+
 
 SLACK_FORM = {
     "text": "unique-question-text",
@@ -80,3 +93,29 @@ def test_enqueue_failure_is_counted_and_still_returns_500(
         sample("jarvis_api_request_duration_seconds_count", outcome="5xx")
         == before_5xx + 1
     )
+
+
+@patch("app.api.webhooks.slack.process_jarvis_query")
+@patch("app.api.webhooks.slack.verify_slack_request", new_callable=AsyncMock)
+def test_enqueue_failure_is_logged_with_the_correlation_id(
+    mock_verify, mock_task
+) -> None:
+    mock_task.apply_async.side_effect = ConnectionError("redis down")
+    handler = ListHandler()
+    root = logging.getLogger()
+    root.addHandler(handler)
+    try:
+        TestClient(app, raise_server_exceptions=False).post(
+            "/slack/commands", data=SLACK_FORM
+        )
+    finally:
+        root.removeHandler(handler)
+
+    task_id = mock_task.apply_async.call_args.kwargs["task_id"]
+    failures = [
+        r for r in handler.records if r.getMessage() == "failed to enqueue task"
+    ]
+    assert len(failures) == 1
+    assert failures[0].levelno == logging.ERROR
+    assert failures[0].correlation_id == task_id
+    assert failures[0].exc_info is not None

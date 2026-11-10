@@ -148,8 +148,11 @@ async def slash_command(
             task_id=cid,
         )
     except Exception:
-        # Still a 500 for Slack, as before; the counter makes it visible.
+        # Still a 500 for Slack, as before. Logged here, inside the request,
+        # so the line carries the correlation ID; the server's own traceback
+        # line is written outside the middleware and has none.
         TASKS_ENQUEUED.labels(outcome="error").inc()
+        logger.exception("failed to enqueue task")
         raise
     TASKS_ENQUEUED.labels(outcome="success").inc()
     logger.info("slash command accepted; task enqueued")
