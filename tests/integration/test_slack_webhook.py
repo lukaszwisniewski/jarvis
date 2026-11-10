@@ -1,5 +1,5 @@
 import time
-from unittest.mock import AsyncMock, patch
+from unittest.mock import ANY, AsyncMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -25,11 +25,14 @@ def test_slash_command_acks_immediately(
 
     assert response.status_code == 200
     assert response.json()["response_type"] == "ephemeral"
-    mock_task.delay.assert_called_once_with(
-        query="hello",
-        response_url="https://hooks.slack.com/test",
-        user_id="U123",
-        scope=None,
+    mock_task.apply_async.assert_called_once_with(
+        kwargs={
+            "query": "hello",
+            "response_url": "https://hooks.slack.com/test",
+            "user_id": "U123",
+            "scope": None,
+        },
+        task_id=ANY,
     )
 
 
@@ -51,11 +54,14 @@ def test_slash_command_scope_prefix_cf(
     )
 
     assert response.status_code == 200
-    mock_task.delay.assert_called_once_with(
-        query="how are thumbnails generated",
-        response_url="https://hooks.slack.com/test",
-        user_id="U123",
-        scope="coldfusion",
+    mock_task.apply_async.assert_called_once_with(
+        kwargs={
+            "query": "how are thumbnails generated",
+            "response_url": "https://hooks.slack.com/test",
+            "user_id": "U123",
+            "scope": "coldfusion",
+        },
+        task_id=ANY,
     )
 
 
@@ -83,7 +89,7 @@ def test_slash_command_rejects_unauthorised_user(
     assert (
         "can't assist" in body["text"].lower() or "restricted" in body["text"].lower()
     )
-    mock_task.delay.assert_not_called()
+    mock_task.apply_async.assert_not_called()
 
 
 @patch("app.api.webhooks.slack.process_jarvis_query")
@@ -105,7 +111,7 @@ def test_slash_command_rejects_missing_fields(
     )
 
     assert response.status_code == 400
-    mock_task.delay.assert_not_called()
+    mock_task.apply_async.assert_not_called()
 
 
 @patch("app.api.webhooks.slack.process_jarvis_query")
@@ -137,7 +143,7 @@ def test_slash_command_rejects_invalid_response_url(
     )
 
     assert response.status_code == 400
-    mock_task.delay.assert_not_called()
+    mock_task.apply_async.assert_not_called()
 
 
 @patch("app.api.webhooks.slack.process_jarvis_query")
@@ -167,4 +173,4 @@ def test_slash_command_rejects_invalid_signature(
     )
 
     assert response.status_code == 403
-    mock_task.delay.assert_not_called()
+    mock_task.apply_async.assert_not_called()

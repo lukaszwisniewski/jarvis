@@ -1,4 +1,5 @@
 import json
+from typing import Literal
 
 from pydantic import Field, field_validator
 from pydantic_core.core_schema import ValidationInfo
@@ -58,6 +59,10 @@ class Settings(BaseSettings):
 
     # Set to true to bypass real Anthropic API calls (dev/test environments)
     llm_stub_mode: bool = False
+
+    # Logging: JSON lines by default; "text" keeps a human-readable format.
+    log_level: str = "INFO"
+    log_format: Literal["json", "text"] = "json"
 
     # Agent mode (off by default): Claude chooses which sources to search via
     # tools, for at most agent_max_tool_rounds rounds of tool calls. The upper
