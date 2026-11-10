@@ -13,8 +13,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 from celery.contrib.testing.worker import start_worker
+from prometheus_client import REGISTRY
 
 import app.workers.tasks as tasks
+from app.config import settings
 from app.logging_config import CorrelationIdFilter
 from app.workers.celery_app import celery_app
 
@@ -83,7 +85,18 @@ def test_same_correlation_id_in_api_worker_celery_and_retry(
         ok,  # second run -> success
     ]
 
+    def metric(name, **labels):
+        return REGISTRY.get_sample_value(name, labels) or 0.0
+
+    duration = "jarvis_task_duration_seconds_count"
+    before = {
+        "retries": metric("jarvis_task_retries_total", reason="slack_timeout"),
+        "retry_runs": metric(duration, mode="pipeline", outcome="retry"),
+        "success_runs": metric(duration, mode="pipeline", outcome="success"),
+    }
+
     with (
+        patch.object(settings, "agent_mode", False),
         patch.object(tasks, "SLACK_RETRY_COUNTDOWN_SECONDS", 0),
         patch.object(tasks, "_build_context", side_effect=fake_build_context),
         patch.object(tasks, "ask_llm", return_value="answer"),
@@ -137,3 +150,14 @@ def test_same_correlation_id_in_api_worker_celery_and_retry(
     # Celery's own records really carry the task ID (not just in the text).
     for record in received + retried + succeeded:
         assert record.data["id"] == cid
+
+    # The retry is visible in metrics: one retry, one retried run, one success.
+    retries = metric("jarvis_task_retries_total", reason="slack_timeout")
+    assert retries == before["retries"] + 1
+    assert (
+        metric(duration, mode="pipeline", outcome="retry") == before["retry_runs"] + 1
+    )
+    assert (
+        metric(duration, mode="pipeline", outcome="success")
+        == before["success_runs"] + 1
+    )

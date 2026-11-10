@@ -13,6 +13,7 @@ exactly as in the default path.
 
 import asyncio
 import logging
+import time
 from typing import TypedDict
 
 from langgraph.graph import END, START, StateGraph
@@ -21,6 +22,7 @@ from app.agent.tools import TOOLS, run_tool
 from app.config import settings
 from app.llm.client import _get_client
 from app.llm.prompts import AGENT_SYSTEM_PROMPT
+from app.observability.metrics import LLM_REQUEST_DURATION, record_llm_usage
 from app.retrieval.context_builder import build_context
 from app.retrieval.models import RetrievalResult
 from app.retrieval.pipeline import retrieve_context
@@ -58,14 +60,23 @@ def build_agent_graph(client, model: str, max_tool_rounds: int):
     async def decide(state: AgentState) -> dict:
         # The SDK client is synchronous; run it in a thread so the event loop
         # stays free, like generate_queries() in the fixed pipeline.
-        response = await asyncio.to_thread(
-            client.messages.create,
-            model=model,
-            max_tokens=1024,
-            system=AGENT_SYSTEM_PROMPT,
-            tools=TOOLS,
-            messages=state["messages"],
-        )
+        start = time.perf_counter()
+        outcome = "error"
+        try:
+            response = await asyncio.to_thread(
+                client.messages.create,
+                model=model,
+                max_tokens=1024,
+                system=AGENT_SYSTEM_PROMPT,
+                tools=TOOLS,
+                messages=state["messages"],
+            )
+            outcome = "success"
+        finally:
+            LLM_REQUEST_DURATION.labels("agent_decide", outcome).observe(
+                time.perf_counter() - start
+            )
+        record_llm_usage("agent_decide", response)
         assistant = {"role": "assistant", "content": response.content}
 
         # stop_reason explains odd runs: "max_tokens" can cut a tool call short

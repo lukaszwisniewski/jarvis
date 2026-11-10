@@ -71,7 +71,7 @@ class GitHubConnector:
                             params=params,
                         )
 
-                    response = await request_with_retry(_fetch)
+                    response = await request_with_retry(_fetch, source="github")
                     response.raise_for_status()
                     data = response.json()
                     all_results.extend(data.get("items", []))
@@ -176,7 +176,7 @@ class GitHubConnector:
                     headers=headers,
                 )
 
-            response = await request_with_retry(_fetch)
+            response = await request_with_retry(_fetch, source="github")
             response.raise_for_status()
 
             data = response.json()

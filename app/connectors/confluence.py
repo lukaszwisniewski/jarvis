@@ -46,7 +46,7 @@ class ConfluenceConnector:
                     params=params,
                 )
 
-            response = await request_with_retry(_fetch)
+            response = await request_with_retry(_fetch, source="confluence")
             response.raise_for_status()
 
             data = response.json()
@@ -74,7 +74,7 @@ class ConfluenceConnector:
                     params=params,
                 )
 
-            response = await request_with_retry(_fetch)
+            response = await request_with_retry(_fetch, source="confluence")
             response.raise_for_status()
             data = response.json()
 
