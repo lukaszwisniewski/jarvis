@@ -28,6 +28,10 @@ _HTTP_CLIENT_LOGGERS = ("httpx", "httpcore", "httpx2", "httpcore2")
 # Slack response URLs (hooks.slack.com, hooks-global.slack.com,
 # hooks.eu.slack.com) let anyone who has them post into the user's Slack,
 # so they are treated as credentials and never written to a log.
+# The pattern matches literal http:// and https:// Slack hook URLs, with
+# optional user info, port and any letter case. It does not match
+# percent-encoded (https%3A%2F%2F...), JSON-escaped (https:\/\/...) or
+# base64-encoded forms; the application does not log URLs in those forms.
 _SLACK_URL_RE = re.compile(
     r"https?://"
     r"(?:[^\s/@'\"<>]+@)?"  # optional user info, e.g. user:pw@
