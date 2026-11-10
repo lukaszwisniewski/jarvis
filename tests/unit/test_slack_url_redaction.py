@@ -195,3 +195,46 @@ def test_filter_never_raises_even_if_redaction_itself_fails(monkeypatch) -> None
     assert SlackUrlRedactingFilter().filter(record) is True
     assert record.getMessage() == "[log record dropped: redaction failed]"
     assert record.data is None
+
+
+HOSTS = ["hooks.slack.com", "hooks-global.slack.com", "hooks.eu.slack.com"]
+URL_FORMS = {
+    "plain": "https://{host}/commands/T1/B2/{token}",
+    "port": "https://{host}:443/commands/T1/B2/{token}",
+    "user_info": "https://user:pw@{host}/commands/T1/B2/{token}",
+    "user_info_and_port": "https://user:pw@{host}:443/commands/T1/B2/{token}",
+    "uppercase": "HTTPS://{HOST}/COMMANDS/T1/B2/{token}",
+    "http": "http://{host}/commands/T1/B2/{token}",
+}
+
+
+@pytest.mark.parametrize("host", HOSTS)
+@pytest.mark.parametrize("form", list(URL_FORMS), ids=list(URL_FORMS))
+def test_every_url_form_is_redacted(host: str, form: str) -> None:
+    url = URL_FORMS[form].format(host=host, HOST=host.upper(), token=TOKEN)
+    # Embedded as Celery does it: inside a repr of the task kwargs.
+    message = f"kwargs={{'response_url': '{url}', 'user_id': 'U1'}} done"
+    record = logging.LogRecord("x", logging.INFO, __file__, 1, message, None, None)
+
+    SlackUrlRedactingFilter().filter(record)
+
+    redacted = record.getMessage()
+    assert TOKEN not in redacted
+    assert host not in redacted.lower()
+    assert redacted == (
+        f"kwargs={{'response_url': '{SLACK_URL_REDACTED}', 'user_id': 'U1'}} done"
+    )
+
+
+def test_text_around_the_url_is_kept() -> None:
+    record = logging.LogRecord(
+        "x",
+        logging.INFO,
+        __file__,
+        1,
+        "posting to (https://user:pw@hooks.slack.com:443/a/b) failed: 503",
+        None,
+        None,
+    )
+    SlackUrlRedactingFilter().filter(record)
+    assert record.getMessage() == f"posting to ({SLACK_URL_REDACTED}) failed: 503"

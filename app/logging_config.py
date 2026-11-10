@@ -28,7 +28,14 @@ _HTTP_CLIENT_LOGGERS = ("httpx", "httpcore", "httpx2", "httpcore2")
 # Slack response URLs (hooks.slack.com, hooks-global.slack.com,
 # hooks.eu.slack.com) let anyone who has them post into the user's Slack,
 # so they are treated as credentials and never written to a log.
-_SLACK_URL_RE = re.compile(r"https?://hooks[\w.-]*\.slack\.com/[^\s'\"<>)\]]*", re.I)
+_SLACK_URL_RE = re.compile(
+    r"https?://"
+    r"(?:[^\s/@'\"<>]+@)?"  # optional user info, e.g. user:pw@
+    r"hooks[\w.-]*\.slack\.com"  # hooks., hooks-global., hooks.eu.slack.com
+    r"(?::\d+)?"  # optional port
+    r"(?:/[^\s'\"<>)\]]*)?",  # path, up to whitespace, a quote or a bracket
+    re.IGNORECASE,
+)
 SLACK_URL_REDACTED = "[REDACTED_SLACK_URL]"
 
 
