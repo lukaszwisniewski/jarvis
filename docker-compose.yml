@@ -30,8 +30,10 @@ services:
       - PROMETHEUS_MULTIPROC_DIR=/tmp/jarvis-metrics
     tmpfs:
       - /tmp/jarvis-metrics
+    # Published on localhost only. Prometheus in the "monitoring" profile
+    # reaches worker:9100 over the Compose network, not through this port.
     ports:
-      - "9100:9100"
+      - "127.0.0.1:9100:9100"
     depends_on:
       - redis
     # Clear old metric files in a separate step before Celery starts.

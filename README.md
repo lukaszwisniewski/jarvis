@@ -136,7 +136,7 @@ docker compose up --build
 The Compose stack starts:
 
 - the FastAPI application on port `8000`;
-- the Celery worker, with its metrics endpoint on port `9100`;
+- the Celery worker, with its metrics endpoint on port `9100` (published on `127.0.0.1` only);
 - Redis on port `6379`.
 
 Check the API:
@@ -264,7 +264,7 @@ Fields: `timestamp` (UTC), `level`, `logger`, `process`, `message`, `correlation
 | `:8000/metrics` | API | API metrics only |
 | `:9100/metrics` | Celery worker | Sum of the worker parent and all its child processes |
 
-**Deployment note.** `/metrics` is on the same port as the Slack webhook. A deployment must put a reverse proxy in front of the API that forwards only `/slack/*` from the internet, so that `/metrics` and `/health` are reachable only internally. That proxy is not part of this repository. Port 9100 should not be exposed publicly either.
+**Deployment note.** `/metrics` is on the same port as the Slack webhook. A deployment must put a reverse proxy in front of the API that forwards only `/slack/*` from the internet, so that `/metrics` and `/health` are reachable only internally. That proxy is not part of this repository. Docker Compose publishes the worker's port 9100 on `127.0.0.1` only. Prometheus in the optional monitoring profile reaches `worker:9100` over the internal Compose network, so it does not need the published port.
 
 **API metrics**
 
