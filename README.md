@@ -279,12 +279,13 @@ Fields: `timestamp` (UTC), `level`, `logger`, `process`, `message`, `correlation
 | `jarvis_task_duration_seconds` | `mode` (`pipeline`, `agent`), `outcome` (`success`, `retry`, `failure`) |
 | `jarvis_task_retries_total` | `reason` (`slack_5xx`, `slack_timeout`, `slack_network`) |
 | `jarvis_source_request_duration_seconds` | `source` (`github`, `jira`, `confluence`), `outcome` (`success`, `error`) |
+| `jarvis_source_query_errors_total` | `source` |
 | `jarvis_http_retries_total` | `source`, `reason` (`status_429`, `status_5xx`, `timeout`, `network`) |
 | `jarvis_http_timeouts_total` | `source` |
 | `jarvis_llm_request_duration_seconds` | `mode` (`query_generation`, `synthesis`, `agent_decide`), `outcome` |
 | `jarvis_llm_input_tokens_total`, `jarvis_llm_output_tokens_total` | `mode` |
 
-Source errors are the `outcome="error"` count of `jarvis_source_request_duration_seconds`. Label values come from a small fixed set. User IDs, queries, URLs, titles and Jira keys are never used as labels.
+Failed search queries are counted in `jarvis_source_query_errors_total{source}`. The providers catch these failures and continue with the remaining queries, so a source that is down still returns normally. In `jarvis_source_request_duration_seconds`, `outcome="success"` therefore means only that no exception escaped the provider, not that its searches worked. `outcome="error"` covers failures outside the per-query handling, such as a failed GitHub file fetch. Label values come from a small fixed set. User IDs, queries, URLs, titles and Jira keys are never used as labels.
 
 **Why the worker has its own endpoint.**
 - The Celery worker uses the prefork pool, so tasks run in forked child processes that each keep their own metric values.

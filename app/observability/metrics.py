@@ -55,10 +55,18 @@ TASK_RETRIES = Counter(
 )
 SOURCE_REQUEST_DURATION = Histogram(
     "jarvis_source_request_duration_seconds",
-    "Time to search one source. source: github, jira, confluence; "
-    "outcome: success or error.",
+    "Time to search one source. source: github, jira, confluence. "
+    "outcome=success only means no exception escaped the provider; failed "
+    "queries are counted in jarvis_source_query_errors_total.",
     ["source", "outcome"],
     buckets=_SLOW_BUCKETS,
+)
+SOURCE_QUERY_ERRORS = Counter(
+    "jarvis_source_query_errors_total",
+    "Search queries that failed inside a provider. Providers catch these and "
+    "continue, so they never show up as outcome=error in "
+    "jarvis_source_request_duration_seconds.",
+    ["source"],
 )
 HTTP_RETRIES = Counter(
     "jarvis_http_retries_total",

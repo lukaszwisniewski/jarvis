@@ -2,6 +2,7 @@ import asyncio
 import logging
 
 from app.connectors.jira import JiraConnector
+from app.observability.metrics import SOURCE_QUERY_ERRORS
 from app.retrieval.models import RetrievalResult
 from app.retrieval.providers.base import RetrievalProvider
 
@@ -21,6 +22,7 @@ class JiraProvider(RetrievalProvider):
 
         for raw_issues in all_raw_groups:
             if isinstance(raw_issues, Exception):
+                SOURCE_QUERY_ERRORS.labels("jira").inc()
                 logger.warning("jira query failed: %s", raw_issues)
                 continue
             for issue in raw_issues:

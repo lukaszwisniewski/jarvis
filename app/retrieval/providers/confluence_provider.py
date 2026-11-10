@@ -3,6 +3,7 @@ import logging
 import re
 
 from app.connectors.confluence import ConfluenceConnector
+from app.observability.metrics import SOURCE_QUERY_ERRORS
 from app.retrieval.models import RetrievalResult
 from app.retrieval.providers.base import RetrievalProvider
 from app.retrieval.snippets import extract_density_snippet, extract_keywords
@@ -23,6 +24,7 @@ class ConfluenceProvider(RetrievalProvider):
 
         for raw_pages in all_raw_groups:
             if isinstance(raw_pages, Exception):
+                SOURCE_QUERY_ERRORS.labels("confluence").inc()
                 logger.warning("confluence query failed: %s", raw_pages)
                 continue
 

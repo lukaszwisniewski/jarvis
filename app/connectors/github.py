@@ -6,6 +6,7 @@ import httpx
 
 from app.config import settings
 from app.connectors.http_retry import DEFAULT_TIMEOUT, request_with_retry
+from app.observability.metrics import SOURCE_QUERY_ERRORS
 from app.retrieval.snippets import extract_anchor_snippet, extract_density_snippet
 
 logger = logging.getLogger(__name__)
@@ -84,6 +85,7 @@ class GitHubConnector:
                         first_paths = [item["path"] for item in data["items"][:3]]
                         logger.debug("top paths for '%s': %s", query, first_paths)
                 except Exception as exc:
+                    SOURCE_QUERY_ERRORS.labels("github").inc()
                     # The query text stays at DEBUG; the warning names the error.
                     logger.warning("github query failed: %s", type(exc).__name__)
                     logger.debug("github query '%s' failed", query, exc_info=True)
