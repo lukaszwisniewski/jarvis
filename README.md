@@ -292,6 +292,17 @@ Source errors are the `outcome="error"` count of `jarvis_source_request_duration
 - Old files would be added to the new totals, so the directory is cleared by a separate command (`python -m app.observability.worker_metrics`) before Celery starts, never inside the running worker.
 - The API imports the worker code, so it has the worker metrics in memory too. It serves only its own registry, so they do not appear on `:8000/metrics`.
 
+### Optional: local Prometheus and Grafana
+
+```bash
+docker compose --profile monitoring up --build
+```
+
+- **Prometheus** (`http://localhost:9090`) scrapes `api:8000` and `worker:9100` every 15 seconds.
+- **Grafana** (`http://localhost:3000`) starts with Prometheus as its data source. Grafana's default `admin` login applies, and it asks you to change the password at first login. No dashboards are included; use Grafana's Explore view.
+- Both are bound to `127.0.0.1` and are meant for local use only.
+- A plain `docker compose up` does not start them.
+
 **Not measured:**
 - Celery queue length. It would need a Redis call on every scrape, and it is not implemented.
 - Per-process CPU and memory of the worker's child processes. prometheus_client does not aggregate them in multiprocess mode.
