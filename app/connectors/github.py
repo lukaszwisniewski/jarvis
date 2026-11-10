@@ -75,16 +75,18 @@ class GitHubConnector:
                     response.raise_for_status()
                     data = response.json()
                     all_results.extend(data.get("items", []))
-                    logger.info(
+                    logger.debug(
                         "github query '%s' returned %s results",
                         query,
                         data.get("total_count", 0),
                     )
                     if data.get("total_count", 0) > 0:
                         first_paths = [item["path"] for item in data["items"][:3]]
-                        logger.info("top paths for '%s': %s", query, first_paths)
-                except Exception:
-                    logger.warning("github query '%s' failed", query, exc_info=True)
+                        logger.debug("top paths for '%s': %s", query, first_paths)
+                except Exception as exc:
+                    # The query text stays at DEBUG; the warning names the error.
+                    logger.warning("github query failed: %s", type(exc).__name__)
+                    logger.debug("github query '%s' failed", query, exc_info=True)
 
         _allowed_extensions = tuple(
             allowed_extensions
@@ -129,7 +131,7 @@ class GitHubConnector:
             if has_allowed_extension:
                 filtered_results.append(item)
 
-            logger.info(
+            logger.debug(
                 "selected result: %s score=%s",
                 item["path"],
                 item["_local_score"],
@@ -216,7 +218,7 @@ class GitHubConnector:
         if self._is_definition_query(query_text):
             class_block = self._extract_class_block(content, queries)
             if class_block:
-                logger.info(
+                logger.debug(
                     "definition class block snippet selected for path=%s",
                     path,
                 )
@@ -232,7 +234,7 @@ class GitHubConnector:
                 suffix="\n...",
             )
             if anchor_snippet:
-                logger.info(
+                logger.debug(
                     "definition anchor snippet selected for path=%s",
                     path,
                 )

@@ -149,6 +149,6 @@ async def retrieve(
         by_source[source] = result
 
     if not any(by_source.values()):
-        logger.warning("all retrieval providers failed for query set=%s", queries)
+        logger.warning("all retrieval providers failed for %s queries", len(queries))
 
     return rank_results(by_source)

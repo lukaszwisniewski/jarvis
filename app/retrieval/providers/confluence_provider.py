@@ -89,7 +89,7 @@ class ConfluenceProvider(RetrievalProvider):
                     )
                     snippet_parts.append("Body: " + snippet[:1600])
 
-                logger.info(
+                logger.debug(
                     "confluence page '%s' score=%s",
                     title,
                     score,

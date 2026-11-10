@@ -52,7 +52,7 @@ class ConfluenceConnector:
             data = response.json()
 
         results = data.get("results", [])
-        logger.info("confluence query '%s' returned %s results", query, len(results))
+        logger.debug("confluence query '%s' returned %s results", query, len(results))
         return results
 
     async def get_page_content(self, page_id: str) -> str:

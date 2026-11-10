@@ -28,7 +28,8 @@ def build_context(results: list[RetrievalResult]) -> str:
 
     context = "\n".join(lines)
 
-    logger.info(
+    # DEBUG: up to 2,000 characters of retrieved (untrusted) content.
+    logger.debug(
         "context preview:\n%s",
         context[:2000],
     )
