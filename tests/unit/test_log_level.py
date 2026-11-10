@@ -9,11 +9,8 @@ from app.observability.celery_signals import setup_worker_logging
 
 
 @pytest.fixture(autouse=True)
-def restore_root_logger():
-    root = logging.getLogger()
-    saved_handlers, saved_level = root.handlers[:], root.level
-    yield
-    root.handlers, root.level = saved_handlers, saved_level
+def _restore(restore_logging):
+    """Every test here reconfigures logging; undo it afterwards."""
 
 
 def root_level() -> int:

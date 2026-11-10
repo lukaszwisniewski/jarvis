@@ -3,20 +3,9 @@ from unittest.mock import AsyncMock, patch
 
 from fastapi.testclient import TestClient
 
-from app.logging_config import CorrelationIdFilter
 from app.main import app
 from app.observability.metrics import API_REGISTRY
-
-
-class ListHandler(logging.Handler):
-    def __init__(self) -> None:
-        super().__init__(level=logging.DEBUG)
-        self.records: list[logging.LogRecord] = []
-        self.addFilter(CorrelationIdFilter())
-
-    def emit(self, record: logging.LogRecord) -> None:
-        self.records.append(record)
-
+from tests.log_capture import RecordCollector
 
 SLACK_FORM = {
     "text": "unique-question-text",
@@ -106,7 +95,7 @@ def test_enqueue_failure_is_logged_with_the_correlation_id(
     mock_verify, mock_task
 ) -> None:
     mock_task.apply_async.side_effect = ConnectionError("redis down")
-    handler = ListHandler()
+    handler = RecordCollector(with_correlation_filter=True)
     root = logging.getLogger()
     root.addHandler(handler)
     try:

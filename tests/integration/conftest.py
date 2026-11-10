@@ -2,6 +2,7 @@
 Slack endpoint served by httpx.MockTransport. Nothing leaves the process."""
 
 import logging
+import threading
 import time
 from collections.abc import Callable
 from unittest.mock import patch
@@ -13,17 +14,20 @@ from celery.contrib.testing.worker import start_worker
 import app.workers.tasks as tasks
 from app.config import settings
 from app.workers.celery_app import celery_app
+from tests.log_capture import restored_logging
 
 
-class RecordCollector(logging.Handler):
-    """Keeps the LogRecord objects so tests can inspect their attributes."""
+def _drop_cached_connections() -> None:
+    """Forget broker pools and result backends built from earlier settings.
 
-    def __init__(self) -> None:
-        super().__init__(level=logging.DEBUG)
-        self.records: list[logging.LogRecord] = []
-
-    def emit(self, record: logging.LogRecord) -> None:
-        self.records.append(record)
+    Celery caches the result backend (in _backend_cache or a thread-local).
+    Without this, a backend created earlier for Redis (for example by a
+    unit test that calls .apply()) would be reused, and the worker tests
+    would try to reach Redis.
+    """
+    celery_app._pool = None
+    celery_app._backend_cache = None
+    celery_app._local = threading.local()
 
 
 @pytest.fixture
@@ -41,11 +45,14 @@ def in_memory_celery(request):
         "result_backend": celery_app.conf.result_backend,
     }
     celery_app.conf.update(broker_url="memory://", result_backend="cache+memory://")
-    celery_app._pool = None  # drop any connection pool built for Redis
-    with start_worker(celery_app, perform_ping_check=False, loglevel=loglevel):
-        yield
+    _drop_cached_connections()
+    # Starting the worker replaces the root handlers (setup_logging); put the
+    # previous logging setup back afterwards so test order does not matter.
+    with restored_logging():
+        with start_worker(celery_app, perform_ping_check=False, loglevel=loglevel):
+            yield
     celery_app.conf.update(**saved)
-    celery_app._pool = None
+    _drop_cached_connections()
 
 
 class FakeSlack:

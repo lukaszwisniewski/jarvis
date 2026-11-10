@@ -17,7 +17,8 @@ import pytest
 
 import app.workers.tasks as tasks
 from app.logging_config import SLACK_URL_REDACTED, configure_logging
-from tests.integration.conftest import RecordCollector, task_finished, wait_until
+from tests.integration.conftest import task_finished, wait_until
+from tests.log_capture import RecordCollector
 
 TOKEN = "xoxSECRETTOKEN42"
 

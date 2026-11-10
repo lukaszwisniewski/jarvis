@@ -18,7 +18,8 @@ import pytest
 
 import app.workers.tasks as tasks
 from app.config import settings
-from tests.integration.conftest import RecordCollector, task_finished, wait_until
+from tests.integration.conftest import task_finished, wait_until
+from tests.log_capture import RecordCollector
 
 TOKEN = "xoxSECRETTOKEN42"
 

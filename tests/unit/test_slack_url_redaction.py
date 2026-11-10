@@ -12,30 +12,10 @@ from app.logging_config import (
     SlackUrlRedactingFilter,
     configure_logging,
 )
+from tests.log_capture import RecordCollector
 
 TOKEN = "xoxSECRETTOKEN42"
 SLACK_URL = f"https://hooks.slack.com/commands/T000/B000/{TOKEN}"
-HTTP_LOGGERS = ("httpx", "httpcore", "httpx2", "httpcore2")
-
-
-class ListHandler(logging.Handler):
-    def __init__(self) -> None:
-        super().__init__(level=logging.DEBUG)
-        self.records: list[logging.LogRecord] = []
-
-    def emit(self, record: logging.LogRecord) -> None:
-        self.records.append(record)
-
-
-@pytest.fixture
-def restore_logging():
-    root = logging.getLogger()
-    saved = (root.handlers[:], root.level)
-    saved_levels = {name: logging.getLogger(name).level for name in HTTP_LOGGERS}
-    yield
-    root.handlers, root.level = saved
-    for name, level in saved_levels.items():
-        logging.getLogger(name).setLevel(level)
 
 
 def post_to_slack() -> None:
@@ -46,7 +26,7 @@ def post_to_slack() -> None:
 
 def test_httpx_logs_the_url_without_our_config(restore_logging) -> None:
     # Negative control: shows the test below would catch the leak.
-    handler = ListHandler()
+    handler = RecordCollector()
     root = logging.getLogger()
     root.handlers = [handler]
     root.setLevel(logging.INFO)
@@ -158,6 +138,7 @@ def test_without_our_handler_python_prints_the_url_on_a_logging_error(capsys) ->
         logger.error("%s %s", SLACK_URL)
     finally:
         logger.removeHandler(handler)
+        logger.propagate = True  # leave no non-propagating logger behind
 
     assert TOKEN in capsys.readouterr().err
 

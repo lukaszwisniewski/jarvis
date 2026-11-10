@@ -7,30 +7,16 @@ import pytest
 
 from app.logging_config import CorrelationIdFilter, JsonFormatter, configure_logging
 from app.observability.context import client_request_id, correlation_id
-
-
-class ListHandler(logging.Handler):
-    """Collects records after our filter has run, like the real handler."""
-
-    def __init__(self) -> None:
-        super().__init__()
-        self.records: list[logging.LogRecord] = []
-        self.addFilter(CorrelationIdFilter())
-
-    def emit(self, record: logging.LogRecord) -> None:
-        self.records.append(record)
+from tests.log_capture import RecordCollector
 
 
 @pytest.fixture
-def captured():
-    handler = ListHandler()
+def captured(restore_logging):
+    handler = RecordCollector(with_correlation_filter=True)
     root = logging.getLogger()
-    old_level = root.level
     root.addHandler(handler)
     root.setLevel(logging.INFO)
-    yield handler.records
-    root.removeHandler(handler)
-    root.setLevel(old_level)
+    return handler.records
 
 
 def make_record(msg="hello", args=None, **extra) -> logging.LogRecord:
@@ -99,18 +85,17 @@ def test_json_formatter_includes_exception() -> None:
     assert "ValueError: boom" in entry["exception"]
 
 
-def test_configure_logging_routes_uvicorn_loggers_through_root() -> None:
+def test_configure_logging_routes_uvicorn_loggers_through_root(
+    restore_logging,
+) -> None:
     root = logging.getLogger()
-    saved_handlers, saved_level = root.handlers[:], root.level
-    try:
-        configure_logging("INFO", "json")
-        assert len(root.handlers) == 1
-        assert isinstance(root.handlers[0].formatter, JsonFormatter)
-        for name in ("uvicorn", "uvicorn.error", "uvicorn.access"):
-            assert logging.getLogger(name).handlers == []
-            assert logging.getLogger(name).propagate is True
-    finally:
-        root.handlers, root.level = saved_handlers, saved_level
+    configure_logging("INFO", "json")
+
+    assert len(root.handlers) == 1
+    assert isinstance(root.handlers[0].formatter, JsonFormatter)
+    for name in ("uvicorn", "uvicorn.error", "uvicorn.access"):
+        assert logging.getLogger(name).handlers == []
+        assert logging.getLogger(name).propagate is True
 
 
 @patch("app.api.webhooks.slack.process_jarvis_query")

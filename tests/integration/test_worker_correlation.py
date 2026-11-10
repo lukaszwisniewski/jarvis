@@ -14,8 +14,8 @@ import pytest
 from prometheus_client import REGISTRY
 
 import app.workers.tasks as tasks
-from app.logging_config import CorrelationIdFilter
-from tests.integration.conftest import RecordCollector, wait_until
+from tests.integration.conftest import wait_until
+from tests.log_capture import RecordCollector
 
 SLACK_URL = "https://hooks.slack.com/test"
 
@@ -24,8 +24,7 @@ SLACK_URL = "https://hooks.slack.com/test"
 def captured():
     # Added after the worker has started: starting it fires setup_logging,
     # which replaces the root handlers.
-    collector = RecordCollector()
-    collector.addFilter(CorrelationIdFilter())
+    collector = RecordCollector(with_correlation_filter=True)
     root = logging.getLogger()
     old_level = root.level
     root.addHandler(collector)
