@@ -41,8 +41,11 @@ services:
 
   redis:
     image: redis:7-alpine
+    # Published on localhost only. The API and the worker reach Redis as
+    # redis:6379 over the Compose network. Redis has no password here and
+    # its messages contain Slack response URLs, so it must not be exposed.
     ports:
-      - "6379:6379"
+      - "127.0.0.1:6379:6379"
 
   # Optional local monitoring: docker compose --profile monitoring up
   prometheus:

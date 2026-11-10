@@ -137,7 +137,7 @@ The Compose stack starts:
 
 - the FastAPI application on port `8000`;
 - the Celery worker, with its metrics endpoint on port `9100` (published on `127.0.0.1` only);
-- Redis on port `6379`.
+- Redis on port `6379` (published on `127.0.0.1` only).
 
 Check the API:
 
