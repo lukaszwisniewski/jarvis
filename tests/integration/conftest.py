@@ -2,7 +2,6 @@
 Slack endpoint served by httpx.MockTransport. Nothing leaves the process."""
 
 import logging
-import threading
 import time
 from collections.abc import Callable
 from unittest.mock import patch
@@ -17,42 +16,22 @@ from app.workers.celery_app import celery_app
 from tests.log_capture import restored_logging
 
 
-def _drop_cached_connections() -> None:
-    """Forget broker pools and result backends built from earlier settings.
-
-    Celery caches the result backend (in _backend_cache or a thread-local).
-    Without this, a backend created earlier for Redis (for example by a
-    unit test that calls .apply()) would be reused, and the worker tests
-    would try to reach Redis.
-    """
-    celery_app._pool = None
-    celery_app._backend_cache = None
-    celery_app._local = threading.local()
-
-
 @pytest.fixture
 def in_memory_celery(request):
     """Start a real worker (solo pool, in a thread) on the in-memory broker.
 
-    Starting the worker fires setup_logging, so the root handler is the one
-    our configure_logging() installs. The worker log level defaults to INFO;
-    parametrize indirectly (e.g. "DEBUG") because Celery decides at pool
-    start whether to write its DEBUG lines.
+    tests/conftest.py configures the in-memory broker and result backend for
+    the whole session. Starting the worker fires setup_logging, so the root
+    handler is the one our configure_logging() installs. The worker log level
+    defaults to INFO; parametrize indirectly (e.g. "DEBUG") because Celery
+    decides at pool start whether to write its DEBUG lines.
     """
     loglevel = getattr(request, "param", "INFO")
-    saved = {
-        "broker_url": celery_app.conf.broker_url,
-        "result_backend": celery_app.conf.result_backend,
-    }
-    celery_app.conf.update(broker_url="memory://", result_backend="cache+memory://")
-    _drop_cached_connections()
     # Starting the worker replaces the root handlers (setup_logging); put the
     # previous logging setup back afterwards so test order does not matter.
     with restored_logging():
         with start_worker(celery_app, perform_ping_check=False, loglevel=loglevel):
             yield
-    celery_app.conf.update(**saved)
-    _drop_cached_connections()
 
 
 class FakeSlack:
