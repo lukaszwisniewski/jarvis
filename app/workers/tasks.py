@@ -146,6 +146,10 @@ def _build_context(query: str, scope: str | None) -> str:
     return asyncio.run(retrieve_context(query, scope=scope))
 
 
+# Delay before retrying a failed Slack POST. A retry reruns the whole task.
+SLACK_RETRY_COUNTDOWN_SECONDS = 5
+
+
 @celery_app.task(bind=True, max_retries=2)
 def process_jarvis_query(
     self,
@@ -192,7 +196,7 @@ def process_jarvis_query(
             response.raise_for_status()
     except httpx.HTTPStatusError as exc:
         if exc.response.status_code >= 500:
-            raise self.retry(exc=exc, countdown=5)
+            raise self.retry(exc=exc, countdown=SLACK_RETRY_COUNTDOWN_SECONDS)
         raise
     except (httpx.TimeoutException, httpx.NetworkError) as exc:
-        raise self.retry(exc=exc, countdown=5)
+        raise self.retry(exc=exc, countdown=SLACK_RETRY_COUNTDOWN_SECONDS)
