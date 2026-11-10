@@ -6,6 +6,7 @@ LOG_FORMAT=text for the old human-readable style (with the same field).
 
 import json
 import logging
+import re
 from datetime import datetime, timezone
 
 from app.observability.context import client_request_id, correlation_id
@@ -18,6 +19,31 @@ TEXT_FORMAT = (
 # Uvicorn installs its own handlers on these loggers; we route them through
 # the root handler instead so their lines use the same format.
 _UVICORN_LOGGERS = ("uvicorn", "uvicorn.error", "uvicorn.access")
+
+# httpx logs every request URL at INFO ("HTTP Request: POST https://..."),
+# which would write Slack's response_url to the log on every answer. These
+# loggers are kept at WARNING even when LOG_LEVEL=DEBUG.
+_HTTP_CLIENT_LOGGERS = ("httpx", "httpcore", "httpx2", "httpcore2")
+
+# Slack response URLs (hooks.slack.com, hooks-global.slack.com,
+# hooks.eu.slack.com) let anyone who has them post into the user's Slack,
+# so they are treated as credentials and never written to a log.
+_SLACK_URL_RE = re.compile(r"https?://hooks[\w.-]*\.slack\.com/[^\s'\"<>)\]]*", re.I)
+SLACK_URL_REDACTED = "[REDACTED_SLACK_URL]"
+
+
+def redact_slack_urls(text: str) -> str:
+    return _SLACK_URL_RE.sub(SLACK_URL_REDACTED, text)
+
+
+def _redact_value(value):
+    if isinstance(value, str):
+        return redact_slack_urls(value)
+    if isinstance(value, dict):
+        return {key: _redact_value(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return type(value)(_redact_value(item) for item in value)
+    return value
 
 
 class CorrelationIdFilter(logging.Filter):
@@ -34,6 +60,31 @@ class CorrelationIdFilter(logging.Filter):
         else:
             record.correlation_id = correlation_id.get()
         record.client_request_id = client_request_id.get()
+        return True
+
+
+class SlackUrlRedactingFilter(logging.Filter):
+    """Safety net: remove Slack response URLs from everything a record carries.
+
+    Celery's own task lines include the task kwargs (with response_url) in
+    record.args and record.data, and exception text can contain the URL.
+    The message is formatted once here and replaced by its redacted text;
+    the exception text is formatted and redacted into record.exc_text,
+    which both formatters use.
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        record.msg = redact_slack_urls(record.getMessage())
+        record.args = None
+        if record.exc_info and not record.exc_text:
+            record.exc_text = logging.Formatter().formatException(record.exc_info)
+        if record.exc_text:
+            record.exc_text = redact_slack_urls(record.exc_text)
+        if record.stack_info:
+            record.stack_info = redact_slack_urls(record.stack_info)
+        data = getattr(record, "data", None)
+        if data is not None:
+            record.data = _redact_value(data)
         return True
 
 
@@ -54,8 +105,11 @@ class JsonFormatter(logging.Formatter):
         client_id = getattr(record, "client_request_id", None)
         if client_id:
             entry["client_request_id"] = client_id
-        if record.exc_info:
-            entry["exception"] = self.formatException(record.exc_info)
+        if record.exc_info or record.exc_text:
+            # exc_text is the redacted text set by SlackUrlRedactingFilter.
+            entry["exception"] = record.exc_text or self.formatException(
+                record.exc_info
+            )
         return json.dumps(entry, default=str)
 
 
@@ -67,7 +121,10 @@ def resolve_log_level(configured: str | None, fallback: str | int) -> str | int:
 def configure_logging(level: str | int = "INFO", log_format: str = "json") -> None:
     """Replace the root handler with one stderr handler in the chosen format."""
     handler = logging.StreamHandler()
+    # Order matters: the correlation filter reads record.data before the
+    # redaction filter replaces it with a redacted copy.
     handler.addFilter(CorrelationIdFilter())
+    handler.addFilter(SlackUrlRedactingFilter())
     if log_format == "text":
         handler.setFormatter(logging.Formatter(TEXT_FORMAT))
     else:
@@ -81,3 +138,6 @@ def configure_logging(level: str | int = "INFO", log_format: str = "json") -> No
         uvicorn_logger = logging.getLogger(name)
         uvicorn_logger.handlers = []
         uvicorn_logger.propagate = True
+
+    for name in _HTTP_CLIENT_LOGGERS:
+        logging.getLogger(name).setLevel(logging.WARNING)

@@ -148,6 +148,11 @@ def _build_context(query: str, scope: str | None) -> str:
     return asyncio.run(retrieve_context(query, scope=scope))
 
 
+def _slack_client() -> httpx.Client:
+    """HTTP client for the Slack POST (a seam for tests to add a transport)."""
+    return httpx.Client()
+
+
 # Delay before retrying a failed Slack POST. A retry reruns the whole task.
 SLACK_RETRY_COUNTDOWN_SECONDS = 5
 
@@ -208,7 +213,7 @@ def process_jarvis_query(
             user_id=user_id,
         )
 
-        with httpx.Client() as client:
+        with _slack_client() as client:
             response = client.post(url=response_url, json=payload, timeout=10)
             response.raise_for_status()
         outcome = "success"
