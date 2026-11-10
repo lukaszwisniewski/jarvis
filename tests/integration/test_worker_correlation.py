@@ -7,83 +7,47 @@ attribute that our logging filter puts on every LogRecord.
 """
 
 import logging
-import time
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import httpx
 import pytest
-from celery.contrib.testing.worker import start_worker
 from prometheus_client import REGISTRY
 
 import app.workers.tasks as tasks
-from app.config import settings
 from app.logging_config import CorrelationIdFilter
-from app.workers.celery_app import celery_app
+from tests.integration.conftest import RecordCollector, wait_until
 
-
-class ListHandler(logging.Handler):
-    def __init__(self) -> None:
-        super().__init__()
-        self.records: list[logging.LogRecord] = []
-        self.addFilter(CorrelationIdFilter())
-
-    def emit(self, record: logging.LogRecord) -> None:
-        self.records.append(record)
+SLACK_URL = "https://hooks.slack.com/test"
 
 
 @pytest.fixture
 def captured():
-    handler = ListHandler()
+    # Added after the worker has started: starting it fires setup_logging,
+    # which replaces the root handlers.
+    collector = RecordCollector()
+    collector.addFilter(CorrelationIdFilter())
     root = logging.getLogger()
     old_level = root.level
-    root.addHandler(handler)
+    root.addHandler(collector)
     root.setLevel(logging.INFO)
-    yield handler.records
-    root.removeHandler(handler)
+    yield collector.records
+    root.removeHandler(collector)
     root.setLevel(old_level)
-
-
-@pytest.fixture
-def in_memory_celery():
-    saved = {
-        "broker_url": celery_app.conf.broker_url,
-        "result_backend": celery_app.conf.result_backend,
-    }
-    celery_app.conf.update(broker_url="memory://", result_backend="cache+memory://")
-    celery_app._pool = None  # drop any connection pool built for Redis
-    with start_worker(celery_app, perform_ping_check=False, loglevel="INFO"):
-        yield
-    celery_app.conf.update(**saved)
-    celery_app._pool = None
-
-
-def wait_until(condition, timeout: float = 15.0) -> None:
-    deadline = time.monotonic() + timeout
-    while not condition():
-        if time.monotonic() > deadline:
-            raise AssertionError("timed out waiting for the worker")
-        time.sleep(0.05)
 
 
 @patch("app.api.webhooks.slack.verify_slack_request", new_callable=AsyncMock)
 def test_same_correlation_id_in_api_worker_celery_and_retry(
-    mock_verify, client, in_memory_celery, captured
+    mock_verify, client, in_memory_celery, fake_slack, captured
 ) -> None:
-    # Fixture order matters: starting the worker fires setup_logging, which
-    # replaces the root handlers, so the capture handler is added afterwards.
     app_logger = logging.getLogger("app.test.worker")
 
     def fake_build_context(query, scope):
         app_logger.info("building context inside the task")
         return ""
 
-    ok = MagicMock(status_code=200)
-    ok.raise_for_status.return_value = None
-    slack_client = MagicMock()
-    slack_client.__enter__.return_value.post.side_effect = [
-        httpx.TimeoutException("slack timed out"),  # first run -> retry
-        ok,  # second run -> success
-    ]
+    # The real httpx.Client posts through a MockTransport (only
+    # tasks._slack_client is patched): a timeout first, then 200.
+    fake_slack.script(SLACK_URL, httpx.ReadTimeout("slack timed out"), 200)
 
     def metric(name, **labels):
         return REGISTRY.get_sample_value(name, labels) or 0.0
@@ -95,18 +59,12 @@ def test_same_correlation_id_in_api_worker_celery_and_retry(
         "success_runs": metric(duration, mode="pipeline", outcome="success"),
     }
 
-    with (
-        patch.object(settings, "agent_mode", False),
-        patch.object(tasks, "SLACK_RETRY_COUNTDOWN_SECONDS", 0),
-        patch.object(tasks, "_build_context", side_effect=fake_build_context),
-        patch.object(tasks, "ask_llm", return_value="answer"),
-        patch.object(tasks.httpx, "Client", return_value=slack_client),
-    ):
+    with patch.object(tasks, "_build_context", side_effect=fake_build_context):
         response = client.post(
             "/slack/commands",
             data={
                 "text": "how does login work",
-                "response_url": "https://hooks.slack.com/test",
+                "response_url": SLACK_URL,
                 "user_id": "U123",
             },
         )
@@ -117,6 +75,8 @@ def test_same_correlation_id_in_api_worker_celery_and_retry(
                 for r in captured
             )
         )
+
+    assert fake_slack.posts == [SLACK_URL, SLACK_URL]
 
     def records_where(predicate):
         return [r for r in captured if predicate(r)]

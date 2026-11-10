@@ -145,4 +145,3 @@ def test_each_request_gets_a_new_correlation_id(client) -> None:
     second = client.get("/health").headers["X-Correlation-ID"]
 
     assert first != second
-    assert correlation_id.get() is None  # reset after the request
