@@ -5,7 +5,7 @@ from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
 from app.api.webhooks.slack import router as slack_router
 from app.config import settings
-from app.logging_config import configure_logging
+from app.logging_config import configure_logging, resolve_log_level
 from app.observability.context import (
     MAX_CLIENT_REQUEST_ID_LENGTH,
     client_request_id,
@@ -18,7 +18,15 @@ from app.observability.metrics import (
     status_class,
 )
 
-configure_logging(settings.log_level, settings.log_format)
+
+def configure_api_logging() -> None:
+    # LOG_LEVEL if set, otherwise INFO.
+    configure_logging(
+        resolve_log_level(settings.log_level, "INFO"), settings.log_format
+    )
+
+
+configure_api_logging()
 
 app = FastAPI(title="Jarvis", version="0.1.0")
 

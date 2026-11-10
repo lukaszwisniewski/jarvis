@@ -4,12 +4,13 @@ Imported by app/workers/celery_app.py, so they are connected wherever the
 Celery app is loaded. setup_logging only fires in a worker.
 """
 
+import logging
 from contextvars import Token
 
 from celery import signals
 
 from app.config import settings
-from app.logging_config import configure_logging
+from app.logging_config import configure_logging, resolve_log_level
 from app.observability.context import correlation_id
 from app.observability.worker_metrics import start_worker_metrics_server
 
@@ -22,7 +23,10 @@ def setup_worker_logging(loglevel=None, **kwargs) -> None:
     # Having any receiver for this signal makes Celery skip its own logging
     # setup, so Celery's lines use our JSON handler too. Child processes
     # inherit this setup through fork (Celery does not redo it).
-    configure_logging(loglevel or settings.log_level, settings.log_format)
+    # LOG_LEVEL if set, otherwise Celery's --loglevel (Celery always passes
+    # one; WARNING is only a fallback if it ever does not).
+    level = resolve_log_level(settings.log_level, loglevel or logging.WARNING)
+    configure_logging(level, settings.log_format)
 
 
 @signals.worker_init.connect

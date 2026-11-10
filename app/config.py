@@ -51,7 +51,6 @@ class Settings(BaseSettings):
     confluence_base_url: str = ""
 
     redis_url: str = "redis://localhost:6379/0"
-    log_level: str = "INFO"
 
     # Optional comma-separated list of allowed Slack user IDs (e.g. "U123,U456")
     # If empty, all users are allowed
@@ -61,7 +60,9 @@ class Settings(BaseSettings):
     llm_stub_mode: bool = False
 
     # Logging: JSON lines by default; "text" keeps a human-readable format.
-    log_level: str = "INFO"
+    # log_level: if set, used by both processes. If unset, the API logs at
+    # INFO and the worker at Celery's --loglevel.
+    log_level: str | None = None
     log_format: Literal["json", "text"] = "json"
 
     # Port of the worker's metrics endpoint. The endpoint only starts when

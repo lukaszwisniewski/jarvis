@@ -59,6 +59,11 @@ class JsonFormatter(logging.Formatter):
         return json.dumps(entry, default=str)
 
 
+def resolve_log_level(configured: str | None, fallback: str | int) -> str | int:
+    """LOG_LEVEL wins when it is set; otherwise use the process's own default."""
+    return configured.upper() if configured else fallback
+
+
 def configure_logging(level: str | int = "INFO", log_format: str = "json") -> None:
     """Replace the root handler with one stderr handler in the chosen format."""
     handler = logging.StreamHandler()
