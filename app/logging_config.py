@@ -63,6 +63,13 @@ class CorrelationIdFilter(logging.Filter):
         return True
 
 
+def _safe_repr(value) -> str:
+    try:
+        return repr(value)
+    except Exception:
+        return "<unrepresentable>"
+
+
 class SlackUrlRedactingFilter(logging.Filter):
     """Safety net: remove Slack response URLs from everything a record carries.
 
@@ -74,7 +81,32 @@ class SlackUrlRedactingFilter(logging.Filter):
     """
 
     def filter(self, record: logging.LogRecord) -> bool:
-        record.msg = redact_slack_urls(record.getMessage())
+        # Handler filters run outside logging's own error handling, so an
+        # exception here would reach the code that logged. Never raise.
+        try:
+            self._redact(record)
+        except Exception:
+            # Last resort: drop everything that could carry a URL.
+            record.msg = "[log record dropped: redaction failed]"
+            record.args = None
+            record.exc_info = None
+            record.exc_text = None
+            record.stack_info = None
+            if hasattr(record, "data"):
+                record.data = None
+        return True
+
+    def _redact(self, record: logging.LogRecord) -> None:
+        try:
+            message = record.getMessage()
+        except Exception:
+            # A malformed call such as logger.info("%s %s", "x"). Keep what
+            # was logged, as repr, so it is still useful, but redacted.
+            message = (
+                "[unformattable log message] "
+                f"msg={_safe_repr(record.msg)} args={_safe_repr(record.args)}"
+            )
+        record.msg = redact_slack_urls(message)
         record.args = None
         if record.exc_info and not record.exc_text:
             record.exc_text = logging.Formatter().formatException(record.exc_info)
@@ -85,7 +117,6 @@ class SlackUrlRedactingFilter(logging.Filter):
         data = getattr(record, "data", None)
         if data is not None:
             record.data = _redact_value(data)
-        return True
 
 
 class JsonFormatter(logging.Formatter):

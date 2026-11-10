@@ -1,3 +1,4 @@
+import json
 import logging
 import sys
 
@@ -131,3 +132,66 @@ def test_all_allowed_slack_hosts_are_redacted(url: str) -> None:
     )
     SlackUrlRedactingFilter().filter(record)
     assert record.getMessage() == f"post to {SLACK_URL_REDACTED}"
+
+
+class BadRepr:
+    def __repr__(self) -> str:
+        raise RuntimeError("repr failed")
+
+
+MALFORMED_CALLS = {
+    "url_in_msg_too_few_args": ("%s %s posted to " + SLACK_URL, ("x",)),
+    "url_in_args_too_few_args": ("%s %s %s", (SLACK_URL, "y")),
+    "too_many_args": ("plain message", (SLACK_URL,)),
+    "bad_repr_too_few_args": ("%s %s " + SLACK_URL, (BadRepr(),)),
+}
+
+
+def test_without_our_handler_python_prints_the_url_on_a_logging_error(capsys) -> None:
+    # Why this matters: Python's own "--- Logging error ---" output prints the
+    # message and the arguments, so a malformed call would leak the URL.
+    logger = logging.getLogger("test.malformed.plain")
+    logger.propagate = False
+    handler = logging.StreamHandler()
+    logger.addHandler(handler)
+    try:
+        logger.error("%s %s", SLACK_URL)
+    finally:
+        logger.removeHandler(handler)
+
+    assert TOKEN in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("log_format", ["json", "text"])
+@pytest.mark.parametrize("call", list(MALFORMED_CALLS), ids=list(MALFORMED_CALLS))
+def test_malformed_log_call_never_raises_and_is_redacted(
+    restore_logging, capsys, log_format, call
+) -> None:
+    configure_logging("DEBUG", log_format)
+    msg, args = MALFORMED_CALLS[call]
+
+    logging.getLogger("test.malformed").info(msg, *args)  # must not raise
+
+    err = capsys.readouterr().err
+    assert TOKEN not in err
+    assert "hooks.slack.com" not in err
+    assert "[unformattable log message]" in err
+    assert "Logging error" not in err  # handled by our filter, not by Python
+    if log_format == "json":
+        lines = [json.loads(line) for line in err.splitlines() if line.strip()]
+        assert len(lines) == 1
+
+
+def test_filter_never_raises_even_if_redaction_itself_fails(monkeypatch) -> None:
+    def broken(text):
+        raise RuntimeError("redaction broke")
+
+    monkeypatch.setattr("app.logging_config.redact_slack_urls", broken)
+    record = logging.LogRecord(
+        "x", logging.INFO, __file__, 1, "sent to %s", (SLACK_URL,), None
+    )
+    record.data = {"kwargs": SLACK_URL}
+
+    assert SlackUrlRedactingFilter().filter(record) is True
+    assert record.getMessage() == "[log record dropped: redaction failed]"
+    assert record.data is None
