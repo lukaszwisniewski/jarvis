@@ -33,7 +33,20 @@ class RecordCollector(logging.Handler):
 
 @contextlib.contextmanager
 def restored_logging() -> Iterator[None]:
-    """Restore the root logger and the loggers configure_logging() changes."""
+    """Restore the logger state that configure_logging() changes.
+
+    On exit it puts back what it saved on entry:
+
+    * the root logger's handlers and level;
+    * the handlers, level and propagate flag of "uvicorn", "uvicorn.error",
+      "uvicorn.access", "httpx", "httpcore", "httpx2" and "httpcore2".
+
+    It does not undo other process-wide logging side effects. In particular,
+    starting a Celery worker (app.log.setup) also calls
+    logging.captureWarnings(True), adds warnings.filterwarnings entries and
+    sets the CELERY_LOG_LEVEL and CELERY_LOG_FILE environment variables;
+    none of these are restored.
+    """
     root = logging.getLogger()
     saved_root = (root.handlers[:], root.level)
     saved = {
