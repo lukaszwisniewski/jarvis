@@ -270,7 +270,7 @@ Fields: `timestamp` (UTC), `level`, `logger`, `process`, `message`, `correlation
 
 | Metric | Labels |
 |---|---|
-| `jarvis_api_request_duration_seconds` | `outcome` (status class, e.g. `2xx`). Scrapes of `/metrics` are not counted |
+| `jarvis_api_request_duration_seconds` | `outcome` (status class, e.g. `2xx`). Requests to `/metrics` and `/health` are not counted |
 | `jarvis_api_tasks_enqueued_total` | `outcome` (`success`, `error`) |
 
 **Worker metrics**

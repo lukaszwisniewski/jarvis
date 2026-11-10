@@ -43,12 +43,17 @@ def test_metrics_endpoint_serves_only_api_metrics(client) -> None:
     assert "jarvis_source_request_duration_seconds" not in response.text
 
 
-def test_request_latency_counted_by_status_class(client) -> None:
+@patch("app.api.webhooks.slack.process_jarvis_query")
+@patch("app.api.webhooks.slack.verify_slack_request", new_callable=AsyncMock)
+def test_request_latency_counted_by_status_class(
+    mock_verify, mock_task, client
+) -> None:
     before = sample("jarvis_api_request_duration_seconds_count", outcome="2xx")
     before_404 = sample("jarvis_api_request_duration_seconds_count", outcome="4xx")
 
-    client.get("/health")
-    client.get("/does-not-exist")
+    client.post("/slack/commands", data=SLACK_FORM)  # counted as 2xx
+    client.get("/does-not-exist")  # counted as 4xx
+    client.get("/health")  # health probes are not counted
     client.get("/metrics")  # scrapes are not counted
 
     assert (

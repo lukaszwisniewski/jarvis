@@ -31,6 +31,9 @@ configure_api_logging()
 app = FastAPI(title="Jarvis", version="0.1.0")
 
 
+_NOT_TIMED_PATHS = {"/metrics", "/health"}
+
+
 @app.middleware("http")
 async def correlation_id_middleware(request: Request, call_next):
     # Always generate our own ID: it becomes the Celery task ID, so it must
@@ -49,8 +52,8 @@ async def correlation_id_middleware(request: Request, call_next):
     finally:
         correlation_id.reset(cid_token)
         client_request_id.reset(client_token)
-        # Scrapes of /metrics are not counted as API traffic.
-        if request.url.path != "/metrics":
+        # Metrics scrapes and health probes are not counted as API traffic.
+        if request.url.path not in _NOT_TIMED_PATHS:
             API_REQUEST_DURATION.labels(outcome=outcome).observe(
                 time.perf_counter() - start
             )
