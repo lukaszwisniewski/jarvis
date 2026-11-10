@@ -25,7 +25,7 @@ JARVIS then:
 7. uses Anthropic to synthesize an answer from that context;
 8. posts the answer back to Slack with a footer showing how many results came from each source.
 
-The application also exposes `GET /health` for a basic health check.
+The application also exposes `GET /health` for a basic health check and `GET /metrics` for Prometheus. The worker serves its own metrics on port 9100; see [Observability](#observability).
 
 ## Architecture
 
@@ -71,6 +71,7 @@ The implementation is deliberately retrieval-first: the LLM is given source mate
 - Retrieved content treated as untrusted input: delimited in the prompt, with system-prompt instructions not to follow instructions found inside it.
 - Anthropic API integration for context-based answer synthesis.
 - Unit and integration tests using pytest, mocks, and fixtures.
+- Structured JSON logs with a correlation ID shared by the API, the Celery worker and Celery's own log lines, plus Prometheus metrics for both processes.
 - Optional LangGraph agent mode in which Claude chooses which sources to search through tools, with a limit on tool rounds.
 - Offline retrieval evaluation (recall@k, MRR per source) over a fixed synthetic corpus, run in CI as a regression gate.
 - Docker Compose setup for local API, worker, and Redis services.
@@ -82,6 +83,7 @@ app/
   api/                 FastAPI routes and Slack webhook
   connectors/          GitHub, Jira, Confluence and HTTP utilities
   agent/               Optional LangGraph agent: search tools and graph
+  observability/       Correlation ID, Celery logging signals, Prometheus metrics
   llm/                 Anthropic client, prompts and deterministic helpers
   retrieval/           Query generation, providers, ranking and context building
   slack/               Slack verification and response formatting
@@ -134,7 +136,7 @@ docker compose up --build
 The Compose stack starts:
 
 - the FastAPI application on port `8000`;
-- the Celery worker;
+- the Celery worker, with its metrics endpoint on port `9100`;
 - Redis on port `6379`.
 
 Check the API:
@@ -162,6 +164,9 @@ The main settings include:
 | `ANTHROPIC_API_KEY` | Enables live answer synthesis |
 | `ANTHROPIC_MODEL_FAST`, `ANTHROPIC_MODEL_SYNTHESIS` | Optional model overrides for query generation and answer synthesis |
 | `LLM_STUB_MODE` | Enables stubbed LLM responses for tests/development |
+| `LOG_LEVEL`, `LOG_FORMAT` | Log level (default `INFO`) and format: `json` (default) or `text` |
+| `WORKER_METRICS_PORT` | Port of the worker's metrics endpoint (default `9100`) |
+| `PROMETHEUS_MULTIPROC_DIR` | Worker only, set by Docker Compose. Turns on prometheus_client multiprocess mode and the worker's metrics endpoint. Do not set it for the API |
 | `AGENT_MODE`, `AGENT_MAX_TOOL_ROUNDS` | Optional agent mode (off by default) and its limit on rounds of tool calls (default 4, allowed 1–8); see [Agent mode](#agent-mode-optional) |
 | `GITHUB_TOKEN` | Authenticates GitHub retrieval |
 | `GITHUB_REPOS` | Default GitHub repositories to search; if empty, code search is not restricted to any repository |
@@ -227,6 +232,70 @@ Agent mode is a demonstration of tool-based retrieval, not a measured improvemen
 - **Retrieved text can steer later searches.** Claude writes each search query after reading earlier tool output, so injected text in a ticket, page or file could try to influence the next query. Tool input is checked only for type and length (200 characters). Search syntax is not removed. A GitHub query could, for example, add qualifiers such as `repo:` or `org:` and search beyond `GITHUB_REPOS`, within what the GitHub token can read. The fixed pipeline already passes generated queries to the connectors unchanged. What is new in agent mode is that third-party content can influence those queries. Hardening query handling in the connectors is planned as a separate task.
 - **LangSmith tracing.** Installing LangGraph also installs the `langsmith` package. JARVIS does not configure or enable it. LangSmith tracing is off unless it is turned on through environment variables, such as `LANGSMITH_TRACING` with a LangSmith API key. If it is enabled, the agent's graph state may be sent to LangSmith, including the question, Claude's messages and retrieved content. Leave these variables unset unless you intend that.
 
+## Observability
+
+### Logs
+
+Both processes write one JSON object per line to stderr. Set `LOG_FORMAT=text` for a readable format with the same fields.
+
+```json
+{"timestamp": "2026-11-10T13:56:31.808+00:00", "level": "INFO", "logger": "celery.worker.strategy", "process": "MainProcess", "message": "Task app.workers.tasks.process_jarvis_query[3157d1ed-...] received", "correlation_id": "3157d1ed-..."}
+```
+
+Fields: `timestamp` (UTC), `level`, `logger`, `process`, `message`, `correlation_id`, and, when present, `client_request_id` and `exception`.
+
+**Correlation ID**
+- The API generates a UUID for every request. It returns it in the `X-Correlation-ID` response header and uses it as the Celery task ID.
+- The worker sets it for the task's duration (`task_prerun` / `task_postrun`), so the task's own log lines carry it.
+- Celery's own lines (received, retry, succeeded, failed) carry the same value. Celery attaches the task ID to those log records, including the "received" line that is logged before the task starts.
+- Celery keeps the task ID on retries, so every attempt has the same `correlation_id`.
+- A client's `X-Request-ID` header is never used as the task ID. It is only logged as `client_request_id`, truncated to 128 characters.
+
+**What the logs contain.** The logs are not free of personal or sensitive data:
+- Queries, result titles and snippets, the raw Claude query response, and the 2,000-character context preview are logged only at `DEBUG`.
+- At `INFO` and `WARNING`, lines carry counts and error types. Exception messages can still contain request URLs, which include search query text.
+- Treat logs as sensitive at every level.
+
+### Metrics
+
+| Endpoint | Process | Content |
+|---|---|---|
+| `:8000/metrics` | API | API metrics only |
+| `:9100/metrics` | Celery worker | Sum of the worker parent and all its child processes |
+
+**Deployment note.** `/metrics` is on the same port as the Slack webhook. A deployment must put a reverse proxy in front of the API that forwards only `/slack/*` from the internet, so that `/metrics` and `/health` are reachable only internally. That proxy is not part of this repository. Port 9100 should not be exposed publicly either.
+
+**API metrics**
+
+| Metric | Labels |
+|---|---|
+| `jarvis_api_request_duration_seconds` | `outcome` (status class, e.g. `2xx`). Scrapes of `/metrics` are not counted |
+| `jarvis_api_tasks_enqueued_total` | `outcome` (`success`, `error`) |
+
+**Worker metrics**
+
+| Metric | Labels |
+|---|---|
+| `jarvis_task_duration_seconds` | `mode` (`pipeline`, `agent`), `outcome` (`success`, `retry`, `failure`) |
+| `jarvis_task_retries_total` | `reason` (`slack_5xx`, `slack_timeout`, `slack_network`) |
+| `jarvis_source_request_duration_seconds` | `source` (`github`, `jira`, `confluence`), `outcome` (`success`, `error`) |
+| `jarvis_http_retries_total` | `source`, `reason` (`status_429`, `status_5xx`, `timeout`, `network`) |
+| `jarvis_http_timeouts_total` | `source` |
+| `jarvis_llm_request_duration_seconds` | `mode` (`query_generation`, `synthesis`, `agent_decide`), `outcome` |
+| `jarvis_llm_input_tokens_total`, `jarvis_llm_output_tokens_total` | `mode` |
+
+Source errors are the `outcome="error"` count of `jarvis_source_request_duration_seconds`. Label values come from a small fixed set. User IDs, queries, URLs, titles and Jira keys are never used as labels.
+
+**Why the worker has its own endpoint.**
+- The Celery worker uses the prefork pool, so tasks run in forked child processes that each keep their own metric values.
+- Docker Compose sets `PROMETHEUS_MULTIPROC_DIR` for the worker only, on a `tmpfs` mount. Every process writes its values to files there, and the worker parent serves their sum on port 9100.
+- Old files would be added to the new totals, so the directory is cleared by a separate command (`python -m app.observability.worker_metrics`) before Celery starts, never inside the running worker.
+- The API imports the worker code, so it has the worker metrics in memory too. It serves only its own registry, so they do not appear on `:8000/metrics`.
+
+**Not measured:**
+- Celery queue length. It would need a Redis call on every scrape, and it is not implemented.
+- Per-process CPU and memory of the worker's child processes. prometheus_client does not aggregate them in multiprocess mode.
+
 ## Evaluation
 
 `eval/` contains an offline retrieval evaluation. It runs the real query fallback, connectors, providers and ranking (`retrieve()`) against a fake HTTP backend that serves a small synthetic corpus, and scores the ranked results against hand-labelled relevant documents.
@@ -277,6 +346,8 @@ The output goes to `eval/results/judge.json`, which is gitignored. No judge resu
 - The project does not include a hosted production deployment or infrastructure provisioning.
 - Conversation history is not persisted as long-term assistant memory.
 - Agent mode is optional, off by default and not covered by the offline evaluation.
+- If posting the answer to Slack fails with a timeout, a network error or a 5xx response, Celery retries the whole task, up to 2 times. A retry reruns retrieval and every Claude call. If Slack had already accepted the first post (for example, a timeout after delivery), the user receives the answer twice. This is not prevented. Retries are counted in `jarvis_task_retries_total`.
+- Logs are not PII-free (see [Observability](#observability)). There is no distributed tracing; requests are correlated through the `correlation_id` log field only.
 - Prompt-injection handling is a prompt-level mitigation (untrusted-content instructions and delimiters), not complete protection.
 
 JARVIS is intended to demonstrate practical backend engineering: API integration, asynchronous processing, retrieval orchestration, failure handling, testing, and LLM integration.
