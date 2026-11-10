@@ -91,13 +91,17 @@ def test_debug_worker_never_logs_the_slack_url(
         "retry": [httpx.ReadTimeout("slack timed out"), 200],
         "client_error": [404],
     }
+    urls: dict[str, str] = {}
+    task_ids: dict[str, str] = {}
     try:
-        task_ids = []
         for name, outcomes in flows.items():
+            # A non-default port: httpx drops :443, so the URL it sends would
+            # no longer match the scripted one and FakeSlack would fail.
             url = fake_slack.script(
-                f"https://user:pw@hooks.slack.com:443/commands/T0/B0/{TOKEN}-{name}",
+                f"https://user:pw@hooks.slack.com:8443/commands/T0/B0/{TOKEN}-{name}",
                 *outcomes,
             )
+            urls[name] = url
             task_id = str(uuid.uuid4())
             tasks.process_jarvis_query.apply_async(
                 kwargs={
@@ -108,12 +112,42 @@ def test_debug_worker_never_logs_the_slack_url(
                 },
                 task_id=task_id,
             )
-            task_ids.append(task_id)
-        for task_id in task_ids:
+            task_ids[name] = task_id
+        for task_id in task_ids.values():
             wait_until(lambda tid=task_id: task_finished(collector.records, tid))
     finally:
         root.removeHandler(raw)
         root.removeHandler(collector)
+
+    # The flows really ran, each as scripted.
+    assert fake_slack.posts.count(urls["retry"]) == 2  # timeout, then 200
+    assert fake_slack.posts.count(urls["client_error"]) == 1  # 404, no retry
+    assert len(fake_slack.posts) == 3
+
+    def final_lines(task_id: str) -> list[logging.LogRecord]:
+        return [
+            r
+            for r in collector.records
+            if isinstance(getattr(r, "data", None), dict)
+            and r.data.get("id") == task_id
+            and ("succeeded" in r.getMessage() or "raised" in r.getMessage())
+        ]
+
+    retry_final = final_lines(task_ids["retry"])
+    assert len(retry_final) == 1
+    assert "succeeded" in retry_final[0].getMessage()
+
+    error_final = final_lines(task_ids["client_error"])
+    assert len(error_final) == 1
+    assert "raised" in error_final[0].getMessage()
+    assert error_final[0].exc_info[0] is httpx.HTTPStatusError
+
+    # No other task failed, and nothing unexpected (such as a KeyError from
+    # an unscripted URL) was raised or logged anywhere.
+    failed = [r for r in collector.records if "raised" in r.getMessage()]
+    assert failed == error_final
+    for record in collector.records:
+        assert "KeyError" not in " ".join(texts(record)), record.getMessage()[:80]
 
     # Sensitivity: before redaction the URL was in Celery's DEBUG pool line.
     apply_lines = [text for name, text in raw.items if "TaskPool: Apply" in text]
