@@ -258,19 +258,21 @@ JSON fields: `timestamp` (UTC), `level`, `logger`, `process`, `message`, `correl
 `LOG_FORMAT=text` gives a readable line with the time, level, logger, `correlation_id` and message, followed by the traceback if there is one. It has no `process` or `client_request_id` field.
 
 **Correlation ID**
-- The API generates a UUID for every request. It returns it in the `X-Correlation-ID` response header and, when the request enqueues a task, uses it as the Celery task ID.
+- The API generates a UUID for every request. It returns it in the `X-Correlation-ID` response header (except on an unhandled `500`, see below) and, when the request enqueues a task, uses it as the Celery task ID.
 - The worker sets it for the task's duration (`task_prerun` / `task_postrun`), so the task's own log lines carry it.
 - Celery's own lines (received, retry, succeeded, failed) carry the same value. Celery attaches the task ID to those log records, including the "received" line that is logged before the task starts.
 - Celery keeps the task ID on retries, so every attempt has the same `correlation_id`.
 - A client's `X-Request-ID` header is never used as the task ID. It is only logged as `client_request_id` (JSON format only), truncated to 128 characters.
 - Uvicorn's access lines (logger `uvicorn.access`, e.g. `"POST /slack/commands HTTP/1.1" 200`) may contain `"correlation_id": null`. The middleware resets the correlation ID before the response is sent, and Uvicorn writes its access line while sending the response, after that reset. A null there does not mean the correlation ID was not generated or not passed on.
-- To identify a single request, use its `X-Correlation-ID` response header. Not every request writes an application log line or enqueues a task. An accepted Slack command logs `slash command accepted; task enqueued` with its correlation ID, and the worker's lines for that task carry the same ID. If enqueueing fails, the API logs `failed to enqueue task`. Rejected Slack requests, `/health`, `/metrics` and unknown routes may write no application line at all.
+- To identify a single request, use its `X-Correlation-ID` response header, when the response has one. Not every request writes an application log line or enqueues a task. An accepted Slack command logs `slash command accepted; task enqueued` with its correlation ID, and the worker's lines for that task carry the same ID. If enqueueing fails, the API logs `failed to enqueue task`. Rejected Slack requests, `/health`, `/metrics` and unknown routes may write no application line at all.
+- An unhandled exception becomes a `500` response without the `X-Correlation-ID` header. Starlette's error handler runs outside our middleware. Uvicorn's `Exception in ASGI application` line and its access line have `"correlation_id": null`. Lines the application wrote earlier in the same request keep the ID. Handled errors, such as `400` or `403`, keep the header. The `500` is counted as `5xx` in `jarvis_api_request_duration_seconds`.
 
 **What the logs contain.** The logs are not free of personal or sensitive data:
-- Queries, result titles and snippets, the raw Claude query response, and the 2,000-character context preview are logged only at `DEBUG`.
-- At `INFO` and `WARNING`, the application's own lines carry counts and error types.
-- Exception text still reaches the logs, and it can contain request URLs that include search query text. This covers Jira and Confluence query warnings, and Celery's retry and failure lines, which include the exception message and, for failures, the traceback.
+- The application's own lines log queries, result titles and snippets, the raw Claude query response, and the 2,000-character context preview only at `DEBUG`. Query text can still appear at `WARNING` inside exception messages (see the exception-text point below).
+- At `INFO` and `WARNING`, the application's own lines carry counts and error types; some warnings also include exception messages (see the exception-text point below).
+- Exception text still reaches the logs, and it can contain request URLs that include search query text. This covers Jira and Confluence query warnings, and Celery's retry and failure lines, which include the exception message and, for failures, the traceback. The `retrieval provider failed`, `agent tool failed` and Confluence `page fetch failed` warnings also include the exception message; in a manual check, they contained GitHub file and Confluence page URLs rather than the user's search query.
 - Celery's task log records also carry the task arguments (`record.args` / `record.data`). The JSON and text formats do not print them, but other handlers could.
+- The Anthropic SDK can log request options at `DEBUG`, including the system prompt, user question, retrieved context and tool results. `ANTHROPIC_LOG=debug` enables this logging even when `LOG_LEVEL=INFO`. In a manual check with a fake API key (anthropic 0.100.0), the key and authentication headers did not appear in the output.
 - **Slack response URLs are redacted from everything the application's log handler writes.** They let anyone post into the user's Slack, so they are treated as credentials:
   - The `httpx` and `httpcore` loggers are kept at `WARNING`, even with `LOG_LEVEL=DEBUG`, because httpx logs every request URL at `INFO`.
   - A filter on the log handler replaces any `hooks*.slack.com` URL with `[REDACTED_SLACK_URL]` in the message, the exception text and the Celery task data. Tests cover retries, retries running out and a 4xx response, at `INFO` and `DEBUG`, in both formats. They run a real Celery worker with the solo pool and the in-memory broker, so they do not cover the Redis transport or the prefork pool.
@@ -335,6 +337,7 @@ docker compose --profile monitoring up --build
 **Not measured:**
 - Celery queue length. It would need a Redis call on every scrape, and it is not implemented.
 - Per-process CPU and memory of the worker's child processes. prometheus_client does not aggregate them in multiprocess mode.
+- Tasks whose worker process is killed, for example by SIGKILL or the out-of-memory killer. The task duration is recorded in a `finally` block, which does not run in this case. So `jarvis_task_duration_seconds` has no sample for that task under any outcome. Celery logs a `WorkerLostError` instead, and that line has `"correlation_id": null`.
 
 ## Evaluation
 
