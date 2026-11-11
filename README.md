@@ -51,7 +51,7 @@ flowchart LR
 | FastAPI | HTTP API and Slack webhook |
 | Slack integration | Request signature verification and response formatting |
 | Celery | Asynchronous execution of retrieval and answer generation |
-| Redis | Celery broker and result backend |
+| Redis | Celery broker (the result backend is configured, but `process_jarvis_query` stores no results) |
 | Retrieval pipeline | Coordinates query generation and source retrieval |
 | GitHub, Jira, Confluence providers | Fetch and normalize source-specific results |
 | Context builder | Formats the top-ranked results into a plain-text context |
@@ -277,11 +277,9 @@ JSON fields: `timestamp` (UTC), `level`, `logger`, `process`, `message`, `correl
   - The `httpx` and `httpcore` loggers are kept at `WARNING`, even with `LOG_LEVEL=DEBUG`, because httpx logs every request URL at `INFO`.
   - A filter on the log handler replaces any `hooks*.slack.com` URL with `[REDACTED_SLACK_URL]` in the message, the exception text and the Celery task data. Tests cover retries, retries running out and a 4xx response, at `INFO` and `DEBUG`, in both formats. They run a real Celery worker with the solo pool and the in-memory broker, so they do not cover the Redis transport or the prefork pool.
   - Limits of this protection: the filter recognises only literal `http://` / `https://` hook URLs, not percent-encoded, JSON-escaped or base64-encoded forms. Output written before logging is configured, or outside our handler (for example, the Celery startup banner and its root-user warning, which are emitted before the application's logging handler is configured), is not filtered.
-  - This protects the logs only. `response_url` is an argument of `process_jarvis_query`, so it travels in the Celery task message through Redis (the broker), and a retry publishes a new message that contains it again.
-  - The result backend, also Redis, is separate and keeps one record per task ID with `status`, `result`, `traceback` and a few metadata fields. With `result_extended` off (Celery's default, not changed here) it does not store the task arguments. For `RETRY` and `FAILURE`, `result` holds the serialized exception (its type, its message arguments and its module).
-  - Each new state normally replaces the task's previous record. The exception is a stored `SUCCESS`: once it is there, Celery skips later state writes for that task.
-  - When the Slack POST fails with an HTTP error status, the `HTTPStatusError` message, and so the stored `result` and `traceback`, contain the URL. That applies while a 5xx retry is pending (`RETRY`) and after a final failure (`FAILURE`). For a retry after an httpx timeout or connection error, whether the URL is stored depends on that exception's message; this has not been verified. A successful run stores no URL.
-  - Records expire after `result_expires` (Celery's default of one day, not overridden). Every write restarts the timer, so a record lasts about one day after its last update.
+  - This protects the logs only. Celery uses the same Redis database for two separate things:
+    - **Broker:** `response_url` is an argument of `process_jarvis_query`, so it is in the task message. The message waits in the queue and, while the task runs, in kombu's unacked keys; a retry publishes a new message that contains it again. The worker needs the URL, so this is inherent. The unacked part comes from reading kombu's code and was not checked on a real Redis.
+    - **Result backend:** `process_jarvis_query` sets `ignore_result=True`, so it stores no result records: no `SUCCESS`, `RETRY` or `FAILURE` record, and a failed task leaves no `celery-task-meta-*` key. Before this, failure and retry records held the URL and its token in the exception message and traceback. Failures are visible in the logs and metrics, not in Redis. This was tested with Celery's in-memory backend, not on a real Redis.
   - Treat Redis as trusted internal infrastructure and never expose it.
 - Treat logs as sensitive at every level.
 
@@ -390,7 +388,7 @@ The output goes to `eval/results/judge.json`, which is gitignored. No judge resu
 - Conversation history is not persisted as long-term assistant memory.
 - Agent mode is optional, off by default and not covered by the offline evaluation.
 - If posting the answer to Slack fails with a timeout, a network error or a 5xx response, Celery retries the whole task, up to 2 times. A retry reruns retrieval and every Claude call. If Slack had already accepted the first post (for example, a timeout after delivery), the user receives the answer twice. This is not prevented. Retries are counted in `jarvis_task_retries_total`.
-- Slack `response_url` values are redacted from the application's log output (within the limits described under [Observability](#observability)), but they are in Redis: in Celery task messages, and, after an HTTP error from Slack (and possibly after a timeout or connection error; not verified), in the task's retry or failure record in the result backend, for about one day after its last update. Redis has no password in the Compose setup and must stay internal.
+- Slack `response_url` values are redacted from the application's log output (within the limits described under [Observability](#observability)), but they are in Redis, in Celery task messages (the broker). The task stores no result records, so a failed task does not leave the URL in the result backend (tested with the in-memory backend, not on a real Redis). Redis has no password in the Compose setup and must stay internal.
 - Logs are not PII-free (see [Observability](#observability)). There is no distributed tracing; requests are correlated through the `correlation_id` log field only.
 - Prompt-injection handling is a prompt-level mitigation (untrusted-content instructions and delimiters), not complete protection.
 
