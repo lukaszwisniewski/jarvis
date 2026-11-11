@@ -23,7 +23,10 @@ class JiraProvider(RetrievalProvider):
         for raw_issues in all_raw_groups:
             if isinstance(raw_issues, Exception):
                 SOURCE_QUERY_ERRORS.labels("jira").inc()
-                logger.warning("jira query failed: %s", raw_issues)
+                # The error text has the request URL with the JQL built from the
+                # user's question, so it stays at DEBUG; the warning names the type.
+                logger.warning("jira query failed: %s", type(raw_issues).__name__)
+                logger.debug("jira query failed", exc_info=raw_issues)
                 continue
             for issue in raw_issues:
                 key = issue.get("key", "")

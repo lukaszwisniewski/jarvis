@@ -25,7 +25,10 @@ class ConfluenceProvider(RetrievalProvider):
         for raw_pages in all_raw_groups:
             if isinstance(raw_pages, Exception):
                 SOURCE_QUERY_ERRORS.labels("confluence").inc()
-                logger.warning("confluence query failed: %s", raw_pages)
+                # The error text has the request URL with the CQL built from the
+                # user's question, so it stays at DEBUG; the warning names the type.
+                logger.warning("confluence query failed: %s", type(raw_pages).__name__)
+                logger.debug("confluence query failed", exc_info=raw_pages)
                 continue
 
             for page in raw_pages:
