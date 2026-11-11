@@ -169,7 +169,10 @@ def _retry(task, exc: Exception, reason: str) -> Exception:
     return retry
 
 
-@celery_app.task(bind=True, max_retries=2)
+# Nothing reads this task's result, so none is stored. Stored failure and
+# retry records held the Slack response URL and its token (exc_message and
+# traceback) in the result backend, where the log redaction does not apply.
+@celery_app.task(bind=True, max_retries=2, ignore_result=True)
 def process_jarvis_query(
     self,
     query: str,
