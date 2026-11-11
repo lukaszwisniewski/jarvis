@@ -240,9 +240,14 @@ Agent mode is a demonstration of tool-based retrieval, not a measured improvemen
 After logging is configured, both processes write one JSON object per line to stderr.
 
 A few startup lines are plain text, because they are written before or outside that setup:
-- the Celery worker's startup banner;
 - the `cleared N metric files` line from the worker's container-start step;
+- Celery's `SecurityWarning` about running as root. The Docker image has no `USER` instruction, so the worker runs as root. Because `accept_content` is JSON only, Celery just warns; it refuses to start as root only when pickle is accepted. The warning is printed through Python's `warnings` module before logging is set up;
+- the Celery worker's startup banner;
 - Uvicorn's own startup and reloader lines in its parent process.
+
+**A failing worker metrics endpoint is silent.** The endpoint is started from Celery's `worker_init` signal, which Celery sends before it sets up logging. If starting it fails, for example because port 9100 is already in use inside the container, Celery catches the exception and logs it through its own logger, which at that point has nowhere to write. Nothing is printed, and the worker goes on processing tasks without a metrics endpoint. The only signs are that `:9100/metrics` does not answer and Prometheus shows the worker target as `down`. (Reproduced with Celery's signal code; not observed in a running container.)
+
+**Host port 9100 already in use.** Docker Compose publishes the worker's port 9100 on `127.0.0.1`. If another process on the host already uses that port (it is also node_exporter's default), Docker cannot publish it and the worker container does not start. Slack commands are then not answered at all, not only unmonitored. This is inferred from Docker's usual behaviour and has not been reproduced here.
 
 ```json
 {"timestamp": "2026-11-10T13:56:31.808+00:00", "level": "INFO", "logger": "celery.worker.strategy", "process": "MainProcess", "message": "Task app.workers.tasks.process_jarvis_query[3157d1ed-...] received", "correlation_id": "3157d1ed-..."}
@@ -267,7 +272,7 @@ JSON fields: `timestamp` (UTC), `level`, `logger`, `process`, `message`, `correl
 - **Slack response URLs are redacted from everything the application's log handler writes.** They let anyone post into the user's Slack, so they are treated as credentials:
   - The `httpx` and `httpcore` loggers are kept at `WARNING`, even with `LOG_LEVEL=DEBUG`, because httpx logs every request URL at `INFO`.
   - A filter on the log handler replaces any `hooks*.slack.com` URL with `[REDACTED_SLACK_URL]` in the message, the exception text and the Celery task data. Tests cover retries, retries running out and a 4xx response, at `INFO` and `DEBUG`, in both formats. They run a real Celery worker with the solo pool and the in-memory broker, so they do not cover the Redis transport or the prefork pool.
-  - Limits of this protection: the filter recognises only literal `http://` / `https://` hook URLs, not percent-encoded, JSON-escaped or base64-encoded forms. Output written before logging is configured, or outside our handler (for example a traceback printed by Python's fallback handler when a Celery `worker_init` handler fails), is not filtered.
+  - Limits of this protection: the filter recognises only literal `http://` / `https://` hook URLs, not percent-encoded, JSON-escaped or base64-encoded forms. Output written before logging is configured, or outside our handler (for example, the Celery startup banner and its root-user warning, which are emitted before the application's logging handler is configured), is not filtered.
   - This protects the logs only. `response_url` is an argument of `process_jarvis_query`, so it travels in the Celery task message through Redis (the broker), and a retry publishes a new message that contains it again.
   - The result backend, also Redis, is separate and keeps one record per task ID with `status`, `result`, `traceback` and a few metadata fields. With `result_extended` off (Celery's default, not changed here) it does not store the task arguments. For `RETRY` and `FAILURE`, `result` holds the serialized exception (its type, its message arguments and its module).
   - Each new state normally replaces the task's previous record. The exception is a stored `SUCCESS`: once it is there, Celery skips later state writes for that task.
