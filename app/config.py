@@ -8,6 +8,9 @@ from pydantic_settings import (
     SettingsConfigDict,
 )
 
+# Accepted LOG_LEVEL values (any case). Empty or unset means "not configured".
+LOG_LEVELS = ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL")
+
 
 class Settings(BaseSettings):
     """Runtime configuration for the JARVIS application.
@@ -61,7 +64,8 @@ class Settings(BaseSettings):
 
     # Logging: JSON lines by default; "text" keeps a human-readable format.
     # log_level: if set, used by both processes. If unset, the API logs at
-    # INFO and the worker at Celery's --loglevel.
+    # INFO and the worker at Celery's --loglevel. Checked when Settings() is
+    # built: one of LOG_LEVELS in any case, or empty/unset.
     log_level: str | None = None
     log_format: Literal["json", "text"] = "json"
 
@@ -230,6 +234,20 @@ class Settings(BaseSettings):
                 parsed[normalized_key] = int(score.strip())
             return parsed
         return value
+
+    @field_validator("log_level", mode="before")
+    @classmethod
+    def _check_log_level(cls, value: object) -> object:
+        # Runs when Settings() is built at import, so a bad value stops the API
+        # and the worker before Celery's signal handlers (which swallow errors).
+        if value is None or value == "":
+            return None  # not configured: each process keeps its own default
+        if isinstance(value, str) and value.upper() in LOG_LEVELS:
+            return value.upper()
+        raise ValueError(
+            f"LOG_LEVEL must be one of {', '.join(LOG_LEVELS)} "
+            "(case-insensitive), or empty/unset"
+        )
 
 
 settings = Settings()

@@ -164,7 +164,7 @@ The main settings include:
 | `ANTHROPIC_API_KEY` | Enables live answer synthesis |
 | `ANTHROPIC_MODEL_FAST`, `ANTHROPIC_MODEL_SYNTHESIS` | Optional model overrides for query generation and answer synthesis |
 | `LLM_STUB_MODE` | Enables stubbed LLM responses for tests/development |
-| `LOG_LEVEL` | Optional. If set (e.g. `DEBUG`), both the API and the worker use it. If unset, the API logs at `INFO` and the worker at Celery's `--loglevel` (`info` in Docker Compose) |
+| `LOG_LEVEL` | Optional. One of `DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL` (case-insensitive); any other value is a startup error in both the API and the worker. If set, both the API and the worker use it. If unset or empty, the API logs at `INFO` and the worker at Celery's `--loglevel` (`info` in Docker Compose) |
 | `LOG_FORMAT` | `json` (default) or `text` |
 | `WORKER_METRICS_PORT` | Port of the worker's metrics endpoint (default `9100`) |
 | `PROMETHEUS_MULTIPROC_DIR` | Worker only, set by Docker Compose. Turns on prometheus_client multiprocess mode and the worker's metrics endpoint. Do not set it for the API |
