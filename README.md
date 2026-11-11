@@ -258,11 +258,13 @@ JSON fields: `timestamp` (UTC), `level`, `logger`, `process`, `message`, `correl
 `LOG_FORMAT=text` gives a readable line with the time, level, logger, `correlation_id` and message, followed by the traceback if there is one. It has no `process` or `client_request_id` field.
 
 **Correlation ID**
-- The API generates a UUID for every request. It returns it in the `X-Correlation-ID` response header and uses it as the Celery task ID.
+- The API generates a UUID for every request. It returns it in the `X-Correlation-ID` response header and, when the request enqueues a task, uses it as the Celery task ID.
 - The worker sets it for the task's duration (`task_prerun` / `task_postrun`), so the task's own log lines carry it.
 - Celery's own lines (received, retry, succeeded, failed) carry the same value. Celery attaches the task ID to those log records, including the "received" line that is logged before the task starts.
 - Celery keeps the task ID on retries, so every attempt has the same `correlation_id`.
 - A client's `X-Request-ID` header is never used as the task ID. It is only logged as `client_request_id` (JSON format only), truncated to 128 characters.
+- Uvicorn's access lines (logger `uvicorn.access`, e.g. `"POST /slack/commands HTTP/1.1" 200`) may contain `"correlation_id": null`. The middleware resets the correlation ID before the response is sent, and Uvicorn writes its access line while sending the response, after that reset. A null there does not mean the correlation ID was not generated or not passed on.
+- To identify a single request, use its `X-Correlation-ID` response header. Not every request writes an application log line or enqueues a task. An accepted Slack command logs `slash command accepted; task enqueued` with its correlation ID, and the worker's lines for that task carry the same ID. If enqueueing fails, the API logs `failed to enqueue task`. Rejected Slack requests, `/health`, `/metrics` and unknown routes may write no application line at all.
 
 **What the logs contain.** The logs are not free of personal or sensitive data:
 - Queries, result titles and snippets, the raw Claude query response, and the 2,000-character context preview are logged only at `DEBUG`.
