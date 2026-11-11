@@ -1,7 +1,9 @@
 import asyncio
 import logging
+import time
 
 from app.config import settings
+from app.observability.metrics import SOURCE_REQUEST_DURATION
 from app.retrieval.models import RetrievalResult
 from app.retrieval.providers.confluence_provider import ConfluenceProvider
 from app.retrieval.providers.github_provider import GitHubProvider
@@ -65,6 +67,20 @@ def _make_provider(source: str, scope: str | None = None):
     raise ValueError(f"unknown retrieval source: {source}")
 
 
+async def _timed_search(source: str, search) -> list[RetrievalResult]:
+    """Await one provider search and record its latency; results unchanged."""
+    start = time.perf_counter()
+    outcome = "error"
+    try:
+        results = await search
+        outcome = "success"
+        return results
+    finally:
+        SOURCE_REQUEST_DURATION.labels(source, outcome).observe(
+            time.perf_counter() - start
+        )
+
+
 async def retrieve_from_source(
     source: str,
     queries: list[str],
@@ -75,7 +91,7 @@ async def retrieve_from_source(
     Unlike retrieve(), provider errors are raised, so the caller decides what
     a failure means. The agent tools use this to search one source at a time.
     """
-    return await _make_provider(source, scope).search(queries)
+    return await _timed_search(source, _make_provider(source, scope).search(queries))
 
 
 def rank_results(
@@ -131,7 +147,10 @@ async def retrieve(
     providers = [_make_provider(source, scope) for source in SOURCES]
 
     provider_results = await asyncio.gather(
-        *(provider.search(queries) for provider in providers),
+        *(
+            _timed_search(source, provider.search(queries))
+            for source, provider in zip(SOURCES, providers)
+        ),
         return_exceptions=True,
     )
 
@@ -149,6 +168,6 @@ async def retrieve(
         by_source[source] = result
 
     if not any(by_source.values()):
-        logger.warning("all retrieval providers failed for query set=%s", queries)
+        logger.warning("all retrieval providers failed for %s queries", len(queries))
 
     return rank_results(by_source)

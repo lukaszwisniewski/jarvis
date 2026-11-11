@@ -2,6 +2,7 @@ import asyncio
 import logging
 
 from app.connectors.jira import JiraConnector
+from app.observability.metrics import SOURCE_QUERY_ERRORS
 from app.retrieval.models import RetrievalResult
 from app.retrieval.providers.base import RetrievalProvider
 
@@ -21,7 +22,11 @@ class JiraProvider(RetrievalProvider):
 
         for raw_issues in all_raw_groups:
             if isinstance(raw_issues, Exception):
-                logger.warning("jira query failed: %s", raw_issues)
+                SOURCE_QUERY_ERRORS.labels("jira").inc()
+                # The error text has the request URL with the JQL built from the
+                # user's question, so it stays at DEBUG; the warning names the type.
+                logger.warning("jira query failed: %s", type(raw_issues).__name__)
+                logger.debug("jira query failed", exc_info=raw_issues)
                 continue
             for issue in raw_issues:
                 key = issue.get("key", "")

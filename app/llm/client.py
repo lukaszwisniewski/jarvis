@@ -1,10 +1,12 @@
 import logging
 import re
+import time
 
 import anthropic
 
 from app.config import settings
 from app.llm.prompts import SYSTEM_PROMPT
+from app.observability.metrics import LLM_REQUEST_DURATION, record_llm_usage
 
 logger = logging.getLogger(__name__)
 
@@ -86,6 +88,9 @@ def ask_llm(
     # (untrusted) content is not elevated to system-level instructions.
     user_content = build_user_content(query=query, context=context)
 
+    mode = "query_generation" if fast else "synthesis"
+    start = time.perf_counter()
+    outcome = "error"
     try:
         message = client.messages.create(
             model=model,
@@ -93,7 +98,11 @@ def ask_llm(
             system=SYSTEM_PROMPT,
             messages=[{"role": "user", "content": user_content}],
         )
+        outcome = "success"
+        record_llm_usage(mode, message)
         return message.content[0].text
     except Exception:
         logger.error("LLM call failed", exc_info=True)
         raise
+    finally:
+        LLM_REQUEST_DURATION.labels(mode, outcome).observe(time.perf_counter() - start)

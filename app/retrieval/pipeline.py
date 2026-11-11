@@ -34,15 +34,17 @@ async def retrieve_context(query: str, scope: str | None = None) -> str:
         scope=scope,
     )
 
-    logger.info(
+    # Queries, titles and snippets are user-derived or retrieved text, so they
+    # are only logged at DEBUG; INFO and WARNING lines carry counts only.
+    logger.debug(
         "queries generated: %s",
         queries,
     )
 
     if not retrieval_results:
         logger.warning(
-            "retrieval returned no results for queries: %s",
-            queries,
+            "retrieval returned no results for %s queries",
+            len(queries),
         )
     else:
         logger.info(
@@ -51,7 +53,7 @@ async def retrieve_context(query: str, scope: str | None = None) -> str:
         )
 
         for result in retrieval_results[:10]:
-            logger.info(
+            logger.debug(
                 "retrieval result: source=%s score=%s title=%s snippet=%s",
                 getattr(result, "source", "unknown"),
                 getattr(result, "score", "unknown"),

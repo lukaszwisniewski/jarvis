@@ -1,5 +1,6 @@
 import asyncio
 import re
+import time
 from urllib.parse import urlparse
 
 import httpx
@@ -8,6 +9,7 @@ from app.agent.graph import agent_retrieve_context
 from app.config import settings
 from app.llm.client import ask_llm
 from app.llm.endpoint_inventory import build_endpoint_inventory_response
+from app.observability.metrics import TASK_DURATION, TASK_RETRIES
 from app.retrieval.pipeline import retrieve_context
 from app.slack.formatting import format_response
 from app.workers.celery_app import celery_app
@@ -146,6 +148,27 @@ def _build_context(query: str, scope: str | None) -> str:
     return asyncio.run(retrieve_context(query, scope=scope))
 
 
+def _slack_client() -> httpx.Client:
+    """HTTP client for the Slack POST (a seam for tests to add a transport)."""
+    return httpx.Client()
+
+
+# Delay before retrying a failed Slack POST. A retry reruns the whole task.
+SLACK_RETRY_COUNTDOWN_SECONDS = 5
+
+
+def _retry(task, exc: Exception, reason: str) -> Exception:
+    """Schedule a Celery retry and count it; returns the Retry to raise.
+
+    When no retries are left, task.retry() raises `exc` itself, so nothing
+    is counted and the task ends as a failure. A retry reruns every Claude
+    call and can post a second answer if Slack accepted the first POST.
+    """
+    retry = task.retry(exc=exc, countdown=SLACK_RETRY_COUNTDOWN_SECONDS, throw=False)
+    TASK_RETRIES.labels(reason).inc()
+    return retry
+
+
 @celery_app.task(bind=True, max_retries=2)
 def process_jarvis_query(
     self,
@@ -171,6 +194,9 @@ def process_jarvis_query(
         CeleryRetry: Retries the task when the Slack post fails with a 5xx status,
             timeout, or network error.
     """
+    mode = "agent" if settings.agent_mode else "pipeline"
+    start = time.perf_counter()
+    outcome = "failure"
     try:
         # Run the async retrieval (pipeline or agent) in a synchronous context
         context = _build_context(query, scope)
@@ -187,12 +213,23 @@ def process_jarvis_query(
             user_id=user_id,
         )
 
-        with httpx.Client() as client:
+        with _slack_client() as client:
             response = client.post(url=response_url, json=payload, timeout=10)
             response.raise_for_status()
+        outcome = "success"
     except httpx.HTTPStatusError as exc:
-        if exc.response.status_code >= 500:
-            raise self.retry(exc=exc, countdown=5)
-        raise
-    except (httpx.TimeoutException, httpx.NetworkError) as exc:
-        raise self.retry(exc=exc, countdown=5)
+        if exc.response.status_code < 500:
+            raise
+        retry = _retry(self, exc, "slack_5xx")
+        outcome = "retry"
+        raise retry
+    except httpx.TimeoutException as exc:
+        retry = _retry(self, exc, "slack_timeout")
+        outcome = "retry"
+        raise retry
+    except httpx.NetworkError as exc:
+        retry = _retry(self, exc, "slack_network")
+        outcome = "retry"
+        raise retry
+    finally:
+        TASK_DURATION.labels(mode, outcome).observe(time.perf_counter() - start)

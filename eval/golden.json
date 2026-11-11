@@ -1,5 +1,5 @@
 {
-  "description": "Hand-labelled questions over eval/corpus. Relevant ids were written before the first eval run and must not be edited to raise scores.",
+  "description": "Synthetic corpus and labelled questions generated with Claude Code and reviewed and approved by the project author. Relevant ids were written before the first eval run and must not be edited to raise scores.",
   "questions": [
     {"id": "q01", "question": "How does the payment service avoid duplicate charges when Stripe times out?", "relevant": ["github:app/services/payment_service.py", "jira:ORD-101", "confluence:1002"]},
     {"id": "q02", "question": "Which API endpoints exist for orders?", "relevant": ["github:app/api/orders.py"]},

@@ -84,7 +84,8 @@ Question:
 
     response = ask_llm(query=prompt, fast=True)
 
-    logger.info(
+    # DEBUG: contains text derived from the user's question.
+    logger.debug(
         "raw llm query response: %s",
         response,
     )

@@ -1,3 +1,4 @@
+import logging
 from urllib.parse import urlparse
 
 from fastapi import (
@@ -10,6 +11,8 @@ from fastapi import (
 
 from app.config import settings
 from app.exceptions import SlackVerificationError
+from app.observability.context import correlation_id, new_correlation_id
+from app.observability.metrics import TASKS_ENQUEUED
 from app.slack.client import verify_slack_request
 from app.workers.tasks import process_jarvis_query
 
@@ -20,6 +23,8 @@ _ALLOWED_RESPONSE_URL_HOSTS = {
 }
 
 router = APIRouter(prefix="/slack", tags=["slack"])
+
+logger = logging.getLogger(__name__)
 
 
 def _parse_scope_and_query(text: str) -> tuple[str | None, str]:
@@ -129,12 +134,28 @@ async def slash_command(
                 ),
             }
 
-    process_jarvis_query.delay(
-        query=query_text,
-        response_url=response_url,
-        user_id=user_id,
-        scope=scope,
-    )
+    # The request's correlation ID becomes the Celery task ID, so the worker
+    # (and Celery's own log lines) carry the same ID without extra plumbing.
+    cid = correlation_id.get() or new_correlation_id()
+    try:
+        process_jarvis_query.apply_async(
+            kwargs={
+                "query": query_text,
+                "response_url": response_url,
+                "user_id": user_id,
+                "scope": scope,
+            },
+            task_id=cid,
+        )
+    except Exception:
+        # Still a 500 for Slack, as before. Logged here, inside the request,
+        # so the line carries the correlation ID; the server's own traceback
+        # line is written outside the middleware and has none.
+        TASKS_ENQUEUED.labels(outcome="error").inc()
+        logger.exception("failed to enqueue task")
+        raise
+    TASKS_ENQUEUED.labels(outcome="success").inc()
+    logger.info("slash command accepted; task enqueued")
 
     # Must return within 3 seconds — heavy work happens in the Celery task
     return {

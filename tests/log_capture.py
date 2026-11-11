@@ -1,0 +1,70 @@
+"""Shared logging helpers for tests."""
+
+import contextlib
+import logging
+from collections.abc import Iterator
+
+from app.logging_config import CorrelationIdFilter
+
+# Loggers whose settings configure_logging() changes.
+_TOUCHED_LOGGERS = (
+    "uvicorn",
+    "uvicorn.error",
+    "uvicorn.access",
+    "httpx",
+    "httpcore",
+    "httpx2",
+    "httpcore2",
+)
+
+
+class RecordCollector(logging.Handler):
+    """Keeps LogRecord objects so tests can inspect their attributes."""
+
+    def __init__(self, *, with_correlation_filter: bool = False) -> None:
+        super().__init__(level=logging.DEBUG)
+        self.records: list[logging.LogRecord] = []
+        if with_correlation_filter:
+            self.addFilter(CorrelationIdFilter())
+
+    def emit(self, record: logging.LogRecord) -> None:
+        self.records.append(record)
+
+
+@contextlib.contextmanager
+def restored_logging() -> Iterator[None]:
+    """Restore the logger state that configure_logging() changes.
+
+    On exit it puts back what it saved on entry:
+
+    * the root logger's handlers and level;
+    * the handlers, level and propagate flag of "uvicorn", "uvicorn.error",
+      "uvicorn.access", "httpx", "httpcore", "httpx2" and "httpcore2".
+
+    It does not undo other process-wide logging side effects. In particular,
+    starting a Celery worker (app.log.setup) also calls
+    logging.captureWarnings(True), adds warnings.filterwarnings entries and
+    sets the CELERY_LOG_LEVEL and CELERY_LOG_FILE environment variables;
+    none of these are restored.
+    """
+    root = logging.getLogger()
+    saved_root = (root.handlers[:], root.level)
+    saved = {
+        name: (
+            logging.getLogger(name).handlers[:],
+            logging.getLogger(name).level,
+            logging.getLogger(name).propagate,
+        )
+        for name in _TOUCHED_LOGGERS
+    }
+    try:
+        yield
+    finally:
+        # setLevel(), not ".level =": only setLevel() clears the loggers'
+        # cached isEnabledFor() answers, which would otherwise go stale.
+        root.handlers = saved_root[0]
+        root.setLevel(saved_root[1])
+        for name, (handlers, level, propagate) in saved.items():
+            logger = logging.getLogger(name)
+            logger.handlers, logger.propagate = handlers, propagate
+            logger.setLevel(level)

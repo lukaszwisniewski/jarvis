@@ -39,7 +39,7 @@ class JiraConnector:
                     params=params,
                 )
 
-            response = await request_with_retry(_fetch)
+            response = await request_with_retry(_fetch, source="jira")
             response.raise_for_status()
 
             data = response.json()

@@ -46,13 +46,13 @@ class ConfluenceConnector:
                     params=params,
                 )
 
-            response = await request_with_retry(_fetch)
+            response = await request_with_retry(_fetch, source="confluence")
             response.raise_for_status()
 
             data = response.json()
 
         results = data.get("results", [])
-        logger.info("confluence query '%s' returned %s results", query, len(results))
+        logger.debug("confluence query '%s' returned %s results", query, len(results))
         return results
 
     async def get_page_content(self, page_id: str) -> str:
@@ -74,7 +74,7 @@ class ConfluenceConnector:
                     params=params,
                 )
 
-            response = await request_with_retry(_fetch)
+            response = await request_with_retry(_fetch, source="confluence")
             response.raise_for_status()
             data = response.json()
 

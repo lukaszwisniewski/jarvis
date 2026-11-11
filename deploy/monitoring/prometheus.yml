@@ -1,0 +1,11 @@
+# Local Prometheus config for the optional "monitoring" Compose profile.
+global:
+  scrape_interval: 15s
+
+scrape_configs:
+  - job_name: jarvis-api
+    static_configs:
+      - targets: ["api:8000"]
+  - job_name: jarvis-worker
+    static_configs:
+      - targets: ["worker:9100"]

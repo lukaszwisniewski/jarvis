@@ -3,6 +3,7 @@ import logging
 import re
 
 from app.connectors.confluence import ConfluenceConnector
+from app.observability.metrics import SOURCE_QUERY_ERRORS
 from app.retrieval.models import RetrievalResult
 from app.retrieval.providers.base import RetrievalProvider
 from app.retrieval.snippets import extract_density_snippet, extract_keywords
@@ -23,7 +24,11 @@ class ConfluenceProvider(RetrievalProvider):
 
         for raw_pages in all_raw_groups:
             if isinstance(raw_pages, Exception):
-                logger.warning("confluence query failed: %s", raw_pages)
+                SOURCE_QUERY_ERRORS.labels("confluence").inc()
+                # The error text has the request URL with the CQL built from the
+                # user's question, so it stays at DEBUG; the warning names the type.
+                logger.warning("confluence query failed: %s", type(raw_pages).__name__)
+                logger.debug("confluence query failed", exc_info=raw_pages)
                 continue
 
             for page in raw_pages:
@@ -89,7 +94,7 @@ class ConfluenceProvider(RetrievalProvider):
                     )
                     snippet_parts.append("Body: " + snippet[:1600])
 
-                logger.info(
+                logger.debug(
                     "confluence page '%s' score=%s",
                     title,
                     score,

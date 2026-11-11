@@ -1,0 +1,9 @@
+# Provisions Prometheus as Grafana's default data source. No dashboards are
+# included; build queries in Grafana's Explore view.
+apiVersion: 1
+datasources:
+  - name: Prometheus
+    type: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true

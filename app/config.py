@@ -1,4 +1,5 @@
 import json
+from typing import Literal
 
 from pydantic import Field, field_validator
 from pydantic_core.core_schema import ValidationInfo
@@ -6,6 +7,9 @@ from pydantic_settings import (
     BaseSettings,
     SettingsConfigDict,
 )
+
+# Accepted LOG_LEVEL values (any case). Empty or unset means "not configured".
+LOG_LEVELS = ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL")
 
 
 class Settings(BaseSettings):
@@ -50,7 +54,6 @@ class Settings(BaseSettings):
     confluence_base_url: str = ""
 
     redis_url: str = "redis://localhost:6379/0"
-    log_level: str = "INFO"
 
     # Optional comma-separated list of allowed Slack user IDs (e.g. "U123,U456")
     # If empty, all users are allowed
@@ -58,6 +61,17 @@ class Settings(BaseSettings):
 
     # Set to true to bypass real Anthropic API calls (dev/test environments)
     llm_stub_mode: bool = False
+
+    # Logging: JSON lines by default; "text" keeps a human-readable format.
+    # log_level: if set, used by both processes. If unset, the API logs at
+    # INFO and the worker at Celery's --loglevel. Checked when Settings() is
+    # built: one of LOG_LEVELS in any case, or empty/unset.
+    log_level: str | None = None
+    log_format: Literal["json", "text"] = "json"
+
+    # Port of the worker's metrics endpoint. The endpoint only starts when
+    # PROMETHEUS_MULTIPROC_DIR is set (docker-compose sets it for the worker).
+    worker_metrics_port: int = 9100
 
     # Agent mode (off by default): Claude chooses which sources to search via
     # tools, for at most agent_max_tool_rounds rounds of tool calls. The upper
@@ -220,6 +234,20 @@ class Settings(BaseSettings):
                 parsed[normalized_key] = int(score.strip())
             return parsed
         return value
+
+    @field_validator("log_level", mode="before")
+    @classmethod
+    def _check_log_level(cls, value: object) -> object:
+        # Runs when Settings() is built at import, so a bad value stops the API
+        # and the worker before Celery's signal handlers (which swallow errors).
+        if value is None or value == "":
+            return None  # not configured: each process keeps its own default
+        if isinstance(value, str) and value.upper() in LOG_LEVELS:
+            return value.upper()
+        raise ValueError(
+            f"LOG_LEVEL must be one of {', '.join(LOG_LEVELS)} "
+            "(case-insensitive), or empty/unset"
+        )
 
 
 settings = Settings()

@@ -1,5 +1,7 @@
 from celery import Celery
 
+# Connect logging and correlation-ID signal handlers.
+import app.observability.celery_signals  # noqa: F401
 from app.config import settings
 
 celery_app = Celery(

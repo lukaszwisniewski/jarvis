@@ -25,11 +25,46 @@ services:
       - REDIS_URL=redis://redis:6379/0
       - NO_PROXY=localhost,127.0.0.1,redis
       - no_proxy=localhost,127.0.0.1,redis
+      # Worker only: prefork children write metric values to files here, and
+      # the worker parent serves their sum on port 9100.
+      - PROMETHEUS_MULTIPROC_DIR=/tmp/jarvis-metrics
+    tmpfs:
+      - /tmp/jarvis-metrics
+    # Published on localhost only. Prometheus in the "monitoring" profile
+    # reaches worker:9100 over the Compose network, not through this port.
+    ports:
+      - "127.0.0.1:9100:9100"
     depends_on:
       - redis
-    command: celery -A app.workers.celery_app:celery_app worker --loglevel=info
+    # Clear old metric files in a separate step before Celery starts.
+    command: sh -c "python -m app.observability.worker_metrics && exec celery -A app.workers.celery_app:celery_app worker --loglevel=info"
 
   redis:
     image: redis:7-alpine
+    # Published on localhost only. The API and the worker reach Redis as
+    # redis:6379 over the Compose network. Redis has no password here and
+    # its messages contain Slack response URLs, so it must not be exposed.
     ports:
-      - "6379:6379"
+      - "127.0.0.1:6379:6379"
+
+  # Optional local monitoring: docker compose --profile monitoring up
+  prometheus:
+    image: prom/prometheus:v2.53.0
+    profiles: ["monitoring"]
+    volumes:
+      - ./deploy/monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    ports:
+      - "127.0.0.1:9090:9090"
+    depends_on:
+      - api
+      - worker
+
+  grafana:
+    image: grafana/grafana:11.1.0
+    profiles: ["monitoring"]
+    volumes:
+      - ./deploy/monitoring/grafana/datasources.yml:/etc/grafana/provisioning/datasources/datasources.yml:ro
+    ports:
+      - "127.0.0.1:3000:3000"
+    depends_on:
+      - prometheus
