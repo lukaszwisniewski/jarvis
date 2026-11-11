@@ -1,0 +1,22 @@
+# Keep secrets and local development files out of the Docker build context.
+# Patterns are matched from the context root; "**/" also matches nested paths.
+
+# Environment files may hold real secrets. This also excludes .env.example,
+# which nothing in the image reads.
+.env
+.env.*
+**/.env
+**/.env.*
+
+# Git metadata and local Claude tooling
+.git
+.claude
+
+# Host virtual environment: the image installs its own dependencies
+.venv
+
+# Local caches
+**/.pytest_cache
+**/.ruff_cache
+**/__pycache__
+**/*.pyc
