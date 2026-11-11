@@ -60,7 +60,11 @@ def restored_logging() -> Iterator[None]:
     try:
         yield
     finally:
-        root.handlers, root.level = saved_root
+        # setLevel(), not ".level =": only setLevel() clears the loggers'
+        # cached isEnabledFor() answers, which would otherwise go stale.
+        root.handlers = saved_root[0]
+        root.setLevel(saved_root[1])
         for name, (handlers, level, propagate) in saved.items():
             logger = logging.getLogger(name)
-            logger.handlers, logger.level, logger.propagate = handlers, level, propagate
+            logger.handlers, logger.propagate = handlers, propagate
+            logger.setLevel(level)
