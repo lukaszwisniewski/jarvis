@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from urllib.parse import urlparse
 
@@ -138,7 +139,10 @@ async def slash_command(
     # (and Celery's own log lines) carry the same ID without extra plumbing.
     cid = correlation_id.get() or new_correlation_id()
     try:
-        process_jarvis_query.apply_async(
+        # apply_async is a blocking call to the broker; run it in a thread so a
+        # slow broker does not freeze the event loop (and every other request).
+        await asyncio.to_thread(
+            process_jarvis_query.apply_async,
             kwargs={
                 "query": query_text,
                 "response_url": response_url,
